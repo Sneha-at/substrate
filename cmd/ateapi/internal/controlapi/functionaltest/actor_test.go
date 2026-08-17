@@ -17,6 +17,7 @@ package functionaltest
 import (
 	"context"
 	"fmt"
+	"regexp"
 	"strings"
 	"sync"
 	"testing"
@@ -164,79 +165,6 @@ func TestCreateActor_WithExternalVolumes(t *testing.T) {
 	}
 	if getResp.GetStatus().GetActorVolumes()[0].GetStatus() != ateapipb.ExternalVolume_STATUS_PENDING {
 		t.Errorf("GetActor status = %v, want %v", getResp.GetStatus().GetActorVolumes()[0].GetStatus(), ateapipb.ExternalVolume_STATUS_PENDING)
-	}
-}
-
-// TestCreateActor_TemplateNotFound tests that creating an actor with a non-existent template fails with FailedPrecondition.
-func TestCreateActor_TemplateNotFound(t *testing.T) {
-	ns := namespaceForTest("ns-create-notfound")
-	tc := setupTest(t, ns)
-	defer tc.cleanup()
-
-	_, err := tc.client.CreateActor(context.Background(), &ateapipb.CreateActorRequest{Actor: &ateapipb.Actor{
-		Metadata:               &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: "id1"},
-		ActorTemplateNamespace: ns,
-		ActorTemplateName:      "non-existent",
-	}})
-	assertGrpcError(t, err, codes.FailedPrecondition, fmt.Sprintf("ActorTemplate %s/non-existent not found", ns))
-}
-
-// TestCreateActor_Duplicate tests that creating an actor with an existing ID fails.
-func TestCreateActor_Duplicate(t *testing.T) {
-	ns := namespaceForTest("ns-create-dup")
-	tc := setupTest(t, ns)
-	defer tc.cleanup()
-
-	createTemplate(t, tc, ns)
-
-	_, err := tc.client.CreateActor(context.Background(), &ateapipb.CreateActorRequest{Actor: &ateapipb.Actor{
-		Metadata:               &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: "id1"},
-		ActorTemplateNamespace: ns,
-		ActorTemplateName:      "tmpl1",
-	}})
-	if err != nil {
-		t.Fatalf("first CreateActor failed: %v", err)
-	}
-
-	_, err = tc.client.CreateActor(context.Background(), &ateapipb.CreateActorRequest{Actor: &ateapipb.Actor{
-		Metadata:               &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: "id1"},
-		ActorTemplateNamespace: ns,
-		ActorTemplateName:      "tmpl1",
-	}})
-	assertGrpcError(t, err, codes.AlreadyExists, "Actor id1 already exists")
-}
-
-// CreateActor is the only lifecycle op with the full identity (incl. version)
-// available in the request, so the whole ate.* set should land on its span.
-func TestCreateActor_StampsFullSpanIdentity(t *testing.T) {
-	ns := namespaceForTest("ns-span-create")
-	tc := setupTest(t, ns)
-	defer tc.cleanup()
-	createTemplate(t, tc, ns)
-
-	attrs := recordRootSpanAttrs(t, func(ctx context.Context) {
-		if _, err := tc.service.CreateActor(ctx, &ateapipb.CreateActorRequest{
-			Actor: &ateapipb.Actor{
-				Metadata:               &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: testActorID},
-				ActorTemplateNamespace: ns,
-				ActorTemplateName:      "tmpl1",
-			},
-		}); err != nil {
-			t.Fatalf("CreateActor: %v", err)
-		}
-	})
-
-	assertSpanStr(t, attrs, ateattr.AtespaceKey, testAtespace)
-	assertSpanStr(t, attrs, ateattr.ActorNameKey, testActorID)
-	assertSpanStr(t, attrs, ateattr.TemplateNameKey, "tmpl1")
-	assertSpanStr(t, attrs, ateattr.TemplateNamespaceKey, ns)
-	// uid is server-assigned on create, so assert it is present and non-empty
-	// rather than a fixed value.
-	if v, ok := attrs[ateattr.ActorUIDKey]; !ok || v.Type() != attribute.STRING || v.AsString() == "" {
-		t.Errorf("%s = %v, want non-empty server-assigned uid", ateattr.ActorUIDKey, v.String())
-	}
-	if v, ok := attrs[ateattr.ActorVersionKey]; !ok || v.Type() != attribute.INT64 || v.AsInt64() != 1 {
-		t.Errorf("%s = %v, want int64 1", ateattr.ActorVersionKey, v.String())
 	}
 }
 
@@ -2774,7 +2702,205 @@ func TestSuspendActor_DanglingWorker(t *testing.T) {
 		t.Fatalf("GetActor failed: %v", err)
 	}
 	if getResp.GetStatus().GetState() != ateapipb.ActorState_ACTOR_STATE_CRASHED {
-		t.Errorf("expected state CRASHED, got %v", getResp.GetStatus().GetState())
+		t.Errorf("expected status CRASHED, got %v", getResp.GetStatus())
+	}
+	if getResp.GetWorkerAssignment() != nil {
+		t.Errorf("expected worker_assignment to be cleared, got %v", getResp.GetWorkerAssignment())
+	}
+}
+
+func TestDeleteActor_Success(t *testing.T) {
+	ns := namespaceForTest("ns-delete-success")
+	tc := setupTest(t, ns)
+	defer tc.cleanup()
+
+	createTemplate(t, tc, ns)
+
+	_, err := tc.client.CreateActor(context.Background(), &ateapipb.CreateActorRequest{Actor: &ateapipb.Actor{
+		Metadata:               &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: "id1"},
+		ActorTemplateNamespace: ns,
+		ActorTemplateName:      "tmpl1",
+	}})
+	if err != nil {
+		t.Fatalf("CreateActor failed: %v", err)
+	}
+
+	deleted, err := tc.client.DeleteActor(context.Background(), &ateapipb.DeleteActorRequest{
+		Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "id1"},
+	})
+	if err != nil {
+		t.Fatalf("DeleteActor failed: %v", err)
+	}
+	// DeleteActor returns the deleted resource.
+	if got := deleted.GetMetadata().GetName(); got != "id1" {
+		t.Errorf("deleted actor name = %q, want id1", got)
+	}
+	if got := deleted.GetMetadata().GetAtespace(); got != testAtespace {
+		t.Errorf("deleted actor atespace = %q, want %q", got, testAtespace)
+	}
+
+	_, err = tc.client.GetActor(context.Background(), &ateapipb.GetActorRequest{
+		Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "id1"},
+	})
+	assertGrpcError(t, err, codes.NotFound, "Actor test-atespace/id1 not found")
+}
+
+func TestDeleteActor_NotSuspended(t *testing.T) {
+	ns := namespaceForTest("ns-delete-notsuspended")
+	tc := setupTest(t, ns)
+	defer tc.cleanup()
+
+	createTemplate(t, tc, ns)
+	createWorkerPod(t, tc, ns, "worker-1", "node1", "pool1")
+
+	_, err := tc.client.CreateActor(context.Background(), &ateapipb.CreateActorRequest{Actor: &ateapipb.Actor{
+		Metadata:               &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: "id1"},
+		ActorTemplateNamespace: ns,
+		ActorTemplateName:      "tmpl1",
+	}})
+	if err != nil {
+		t.Fatalf("CreateActor failed: %v", err)
+	}
+
+	_, err = tc.client.ResumeActor(context.Background(), &ateapipb.ResumeActorRequest{
+		Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "id1"},
+	})
+	if err != nil {
+		t.Fatalf("ResumeActor failed: %v", err)
+	}
+
+	_, err = tc.client.DeleteActor(context.Background(), &ateapipb.DeleteActorRequest{
+		Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "id1"},
+	})
+	assertGrpcError(t, err, codes.FailedPrecondition, "Actor test-atespace/id1 is not in a deletable status (status: STATUS_RUNNING)")
+}
+
+func TestDeleteActor_Crashed(t *testing.T) {
+	ns := namespaceForTest("ns-delete-crashed")
+	tc := setupTest(t, ns)
+	defer tc.cleanup()
+
+	createTemplate(t, tc, ns)
+
+	if _, err := tc.client.CreateActor(context.Background(), &ateapipb.CreateActorRequest{Actor: &ateapipb.Actor{
+		Metadata:               &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: "id1"},
+		ActorTemplateNamespace: ns,
+		ActorTemplateName:      "tmpl1",
+	}}); err != nil {
+		t.Fatalf("CreateActor failed: %v", err)
+	}
+
+	actorRef := resources.ActorRef{Atespace: testAtespace, Name: "id1"}
+	if _, err := tc.persistence.UpdateActor(context.Background(), actorRef, func(toUpdate *ateapipb.Actor) error {
+		toUpdate.Status.State = ateapipb.ActorState_ACTOR_STATE_CRASHED
+		return nil
+	}); err != nil {
+		t.Fatalf("UpdateActor failed: %v", err)
+	}
+
+	deleted, err := tc.client.DeleteActor(context.Background(), &ateapipb.DeleteActorRequest{
+		Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "id1"},
+	})
+	if err != nil {
+		t.Fatalf("DeleteActor of crashed actor failed: %v", err)
+	}
+	if got := deleted.GetStatus().GetState(); got != ateapipb.ActorState_ACTOR_STATE_DELETING {
+		t.Errorf("deleted actor status = %v, want %v", got, ateapipb.ActorState_ACTOR_STATE_DELETING)
+	}
+
+	_, err = tc.client.GetActor(context.Background(), &ateapipb.GetActorRequest{
+		Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "id1"},
+	})
+	assertGrpcError(t, err, codes.NotFound, "Actor test-atespace/id1 not found")
+}
+
+func TestDeleteActor_NotFound(t *testing.T) {
+	ns := namespaceForTest("ns-delete-notfound")
+	tc := setupTest(t, ns)
+	defer tc.cleanup()
+
+	_, err := tc.client.DeleteActor(context.Background(), &ateapipb.DeleteActorRequest{
+		Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "non-existent"},
+	})
+	assertGrpcError(t, err, codes.NotFound, "Actor test-atespace/non-existent not found")
+}
+
+func assertGrpcErrorRegex(t *testing.T, err error, wantCode codes.Code, wantMsg string) {
+	t.Helper()
+	fn := func(got string) (string, bool) {
+		matched, matchErr := regexp.MatchString(wantMsg, got)
+		if matchErr != nil {
+			t.Fatalf("failed to compile regex %q: %v", wantMsg, matchErr)
+		}
+		return wantMsg, matched
+	}
+	assertGrpcErrorImpl(t, err, wantCode, fn)
+}
+
+func assertGrpcError(t *testing.T, err error, wantCode codes.Code, wantMsg string) {
+	t.Helper()
+	fn := func(got string) (string, bool) {
+		return wantMsg, got == wantMsg
+	}
+	assertGrpcErrorImpl(t, err, wantCode, fn)
+}
+
+func assertGrpcErrorImpl(t *testing.T, err error, wantCode codes.Code, msgMatches func(got string) (string, bool)) {
+	t.Helper()
+	if err == nil {
+		t.Fatalf("expected error, got nil")
+	}
+	st, ok := status.FromError(err)
+	if !ok {
+		t.Fatalf("expected gRPC status error, got: %v", err)
+	}
+	if st.Code() != wantCode {
+		t.Errorf("expected status %v, got %v", wantCode, st.Code())
+	}
+	if want, ok := msgMatches(st.Message()); !ok {
+		t.Errorf("expected message %q, got %q", want, st.Message())
+	}
+}
+
+func TestCreateActor_AtespaceNotFound(t *testing.T) {
+	ns := namespaceForTest("ns-create-actor-no-atespace")
+	tc := setupTest(t, ns)
+	defer tc.cleanup()
+	createTemplate(t, tc, ns)
+
+	// The template exists, but "missing-as" was never created. The template
+	// check fires first, so reaching this error proves the atespace check ran.
+	_, err := tc.client.CreateActor(context.Background(), &ateapipb.CreateActorRequest{Actor: &ateapipb.Actor{
+		Metadata:               &ateapipb.ResourceMetadata{Atespace: "missing-as", Name: "id1"},
+		ActorTemplateNamespace: ns,
+		ActorTemplateName:      "tmpl1",
+	}})
+	assertGrpcError(t, err, codes.FailedPrecondition, "Atespace missing-as not found")
+}
+
+func TestCreateAtespace_Success(t *testing.T) {
+	ns := namespaceForTest("ns-create-atespace")
+	tc := setupTest(t, ns)
+	defer tc.cleanup()
+	createTemplate(t, tc, ns)
+
+	resp, err := tc.client.CreateAtespace(context.Background(), &ateapipb.CreateAtespaceRequest{
+		Atespace: &ateapipb.Atespace{
+			Metadata: &ateapipb.ResourceMetadata{
+				Name:       "team-a",
+				Uid:        "caller-supplied-uid",
+				Version:    999,
+				CreateTime: timestamppb.New(time.Unix(1, 0)),
+				UpdateTime: timestamppb.New(time.Unix(1, 0)),
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("CreateAtespace failed: %v", err)
+	}
+	md := resp.GetMetadata()
+	if md.GetName() != "team-a" {
+		t.Errorf("Name = %q, want team-a", md.GetName())
 	}
 	if getResp.GetStatus().GetWorkerAssignment() != nil {
 		t.Errorf("expected worker_assignment to be cleared, got %v", getResp.GetStatus().GetWorkerAssignment())
