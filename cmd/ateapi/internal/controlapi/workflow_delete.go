@@ -152,7 +152,6 @@ func (w *ActorWorkflow) ensureAteletTerminated(ctx context.Context, actorRef res
 			if vol.GetStorageVolumeId() != "" {
 				workloadSpec.Volumes = append(workloadSpec.Volumes, &ateletpb.Volume{
 					Name: vol.GetVolumeName(),
-					Type: ateletpb.VolumeType_VOLUME_TYPE_EXTERNAL,
 					Source: &ateletpb.Volume_External{
 						External: &ateletpb.ExternalVolumeSource{
 							StorageVolumeId: vol.GetStorageVolumeId(),
@@ -219,13 +218,13 @@ func (w *ActorWorkflow) ensureWorkerReleased(ctx context.Context, actorRef resou
 			return nil, err
 		}
 
-		updatedActor, err := w.store.UpdateActor(ctx, actorRef, store.WithPrecondition(latestActor, func(dbActor *ateapipb.Actor) error {
+		updatedActor, err := w.store.UpdateActor(ctx, actorRef, store.PreconditionFrom(latestActor), func(dbActor *ateapipb.Actor) error {
 			if dbActor.Status != nil {
 				dbActor.Status.LocalSnapshotInfo = nil
 				dbActor.Status.WorkerAssignment = nil
 			}
 			return nil
-		}))
+		})
 		if err != nil {
 			if errors.Is(err, store.ErrVersionConflict) {
 				return nil, status.Error(codes.Aborted, "concurrent update conflict, please retry")
@@ -251,9 +250,7 @@ func (w *ActorWorkflow) ensureMarkedDeleting(ctx context.Context, actorRef resou
 	}
 	shouldDelete := false
 	switch st {
-	// Allow deletion for actors in `DELETING` state
-	case ateapipb.ActorState_ACTOR_STATE_DELETING,
-		ateapipb.ActorState_ACTOR_STATE_SUSPENDED,
+	case ateapipb.ActorState_ACTOR_STATE_SUSPENDED,
 		ateapipb.ActorState_ACTOR_STATE_CRASHED:
 		shouldDelete = true
 	default:

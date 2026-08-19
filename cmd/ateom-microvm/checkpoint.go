@@ -191,7 +191,7 @@ func (s *AteomService) CheckpointWorkload(ctx context.Context, req *ateompb.Chec
 	tTeardown := time.Now()
 	if err := s.terminateWorkload(ctx, actorUID); err != nil {
 		slog.WarnContext(ctx, "failed to terminate workload after checkpoint",
-			slog.String("actor", actorRef.String()),
+			slog.String("actor", attribution.Ref.String()),
 			slog.String("actorUID", actorUID),
 			slog.Any("err", err))
 	}
@@ -356,14 +356,13 @@ func (s *AteomService) TerminateWorkload(ctx context.Context, req *ateompb.Termi
 	s.lock.Lock()
 	defer s.lock.Unlock()
 
-	actorRef := resources.ActorRef{Atespace: req.GetAtespace(), Name: req.GetActorName()}
-	actorUID := req.GetActorUid()
+	attribution := ateomstats.ActorAttributionFromRequest(req)
 
-	if err := s.terminateWorkload(ctx, actorUID); err != nil {
+	if err := s.terminateWorkload(ctx, attribution.UID); err != nil {
 		return nil, fmt.Errorf("failed to terminate workload: %w", err)
 	}
 
-	s.actorLogger.EmitLifecycleLog("Actor terminated", actorRef, actorUID, req.GetActorTemplateNamespace(), req.GetActorTemplateName())
+	s.actorLogger.EmitLifecycleLog(ctx, "Actor terminated", attribution)
 
 	return &ateompb.TerminateWorkloadResponse{}, nil
 }
