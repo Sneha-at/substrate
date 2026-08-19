@@ -223,6 +223,8 @@ func detachActorVolumes(ctx context.Context, st detachActorVolumesStore, registr
 	if template != nil {
 		volumesToDetach = getMountedActorVolumes(ctx, ref, actor.GetStatus().GetActorVolumes(), template)
 	}
+	// Collect errors for all volumes to detach, but continue processing so we attempt to detach all volumes.
+	var errs []error
 	for _, vol := range volumesToDetach {
 		// StorageVolumeId is only populated once the volume is provisioned.
 		// Skip volumes that were never created (e.g. failed during PENDING state).
@@ -233,18 +235,18 @@ func detachActorVolumes(ctx context.Context, st detachActorVolumesStore, registr
 		slog.InfoContext(ctx, "Detaching volume from node", slog.String("volume_id", vol.GetStorageVolumeId()), slog.String("node", node))
 		plugin, err := registry.GetPlugin(ctx, vol.GetVolumeType())
 		if err != nil {
-			return fmt.Errorf("failed to get volume plugin for %q: %w", vol.GetVolumeType(), err)
+			errs = append(errs, fmt.Errorf("failed to get volume plugin for %q: %w", vol.GetVolumeType(), err))
+			continue
 		}
-		err = plugin.DetachVolume(ctx, vol.GetStorageVolumeId(), node)
-		if err != nil {
+		if err := plugin.DetachVolume(ctx, vol.GetStorageVolumeId(), node); err != nil {
 			if status.Code(err) == codes.NotFound {
 				slog.WarnContext(ctx, "Volume not found during detach, assuming already detached", slog.String("volume_id", vol.GetStorageVolumeId()), slog.String("node", node))
 				continue
 			}
-			return fmt.Errorf("failed to detach volume %q from node %q: %w", vol.GetStorageVolumeId(), node, err)
+			errs = append(errs, fmt.Errorf("failed to detach volume %q from node %q: %w", vol.GetStorageVolumeId(), node, err))
 		}
 	}
-	return nil
+	return errors.Join(errs...)
 }
 
 // detachActorVolumesStore enumerates the subset of store methods needed to

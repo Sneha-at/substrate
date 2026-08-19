@@ -787,10 +787,10 @@ func (s *AteomService) CheckpointWorkload(ctx context.Context, req *ateompb.Chec
 
 	// Cleanup the containers after checkpointing.
 	// This is best-effort cleanup for actor containers that may have been left behind after checkpointing.
-	if err := s.terminateWorkload(ctx, actorRef, req.GetActorUid(), req.GetRunscPath(), req.GetSpec().GetContainers()); err != nil {
+	if err := s.terminateWorkload(ctx, attribution.Ref, attribution.UID, req.GetRunscPath(), req.GetSpec().GetContainers()); err != nil {
 		slog.WarnContext(ctx, "failed to terminate workload after checkpoint",
-			slog.String("actor", actorRef.String()),
-			slog.String("actorUID", req.GetActorUid()),
+			slog.String("actor", attribution.Ref.String()),
+			slog.String("actorUID", attribution.UID),
 			slog.Any("err", err))
 	}
 
@@ -824,18 +824,7 @@ func listSnapshotFiles(dir string) ([]string, error) {
 	return files, nil
 }
 
-func isRunscNotFoundError(err error) bool {
-	if err == nil {
-		return false
-	}
-	msg := err.Error()
-	return errors.Is(err, os.ErrNotExist) ||
-		strings.Contains(msg, "does not exist") ||
-		strings.Contains(msg, "not found") ||
-		strings.Contains(msg, "no such file or directory")
-}
-
-func (r *runsc) stopContainers(ctx context.Context, rcmd *runsc, containers []*ateompb.Container) {
+func (r *runsc) stopContainers(ctx context.Context, containers []*ateompb.Container) {
 	for _, ctr := range containers {
 		_ = r.cmdKill(ctx, ctr.GetName(), "SIGKILL")
 		_ = r.cmdWait(ctx, ctr.GetName())
@@ -845,10 +834,6 @@ func (r *runsc) stopContainers(ctx context.Context, rcmd *runsc, containers []*a
 }
 
 func (r *runsc) cleanupContainers(ctx context.Context, containers []*ateompb.Container) error {
-	if r.path == "" {
-		return nil
-	}
-
 	// Check state of all containers to mimic containerd.
 	//
 	// Without this, `runsc delete` occasionally throws an error.
@@ -861,19 +846,14 @@ func (r *runsc) cleanupContainers(ctx context.Context, containers []*ateompb.Con
 		}
 	}
 
-	// cleanupContainers is idempotent: if a container is already deleted, ignore the error and continue.
 	for _, ctr := range containers {
 		if err := r.cmdDelete(ctx, ctr.GetName()); err != nil {
-			if !isRunscNotFoundError(err) {
-				return fmt.Errorf("while deleting %q application container: %w", ctr.GetName(), err)
-			}
+			return fmt.Errorf("while deleting %q application container: %w", ctr.GetName(), err)
 		}
 	}
-	// cleanupContainers is idempotent: if a container is already deleted, ignore the error and continue.
+
 	if err := r.cmdDelete(ctx, "pause"); err != nil {
-		if !isRunscNotFoundError(err) {
-			return fmt.Errorf("while deleting pause container: %w", err)
-		}
+		return fmt.Errorf("while deleting pause container: %w", err)
 	}
 
 	return nil
@@ -1079,13 +1059,13 @@ func (s *AteomService) TerminateWorkload(ctx context.Context, req *ateompb.Termi
 
 	s.activeActor.Store(nil)
 
-	actorRef := resources.ActorRef{Atespace: req.GetAtespace(), Name: req.GetActorName()}
+	attribution := ateomstats.ActorAttributionFromRequest(req)
 
-	if err := s.terminateWorkload(ctx, actorRef, req.GetActorUid(), req.GetRunscPath(), req.GetSpec().GetContainers()); err != nil {
+	if err := s.terminateWorkload(ctx, attribution.Ref, attribution.UID, req.GetRunscPath(), req.GetSpec().GetContainers()); err != nil {
 		return nil, fmt.Errorf("failed to terminate workload: %w", err)
 	}
 
-	s.actorLogger.EmitLifecycleLog("Actor terminated", actorRef, req.GetActorUid(), req.GetActorTemplateNamespace(), req.GetActorTemplateName())
+	s.actorLogger.EmitLifecycleLog(ctx, "Actor terminated", attribution)
 	s.activeSession = nil
 
 	return &ateompb.TerminateWorkloadResponse{}, nil
@@ -1103,7 +1083,7 @@ func (s *AteomService) terminateWorkload(ctx context.Context, actorRef resources
 	}
 
 	// Stop the containers before deleting them, to avoid leaving a live container with no bundle on disk. Best-effort: if the containers are already stopped, the delete will succeed anyway.
-	rcmd.stopContainers(ctx, rcmd, containers)
+	rcmd.stopContainers(ctx, containers)
 	// Keep this as best-effort cleanup:
 	// atelet resets the actor runsc, bundle, pidfile, and checkpoint
 	// directories after uploading the snapshot.
