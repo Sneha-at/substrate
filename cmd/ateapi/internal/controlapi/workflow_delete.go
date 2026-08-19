@@ -111,7 +111,7 @@ func (w *ActorWorkflow) ensureAteletTerminated(ctx context.Context, actorRef res
 	ctx, done := stepSpan(ctx, "CallAteletTerminate")
 	defer func() { err = done(err) }()
 
-	assignment := actor.GetWorkerAssignment()
+	assignment := actor.GetStatus().GetWorkerAssignment()
 	if assignment == nil {
 		slog.InfoContext(ctx, "actor has no worker assignment, skipping atlet terminate request", slog.Any("actor", actorRef))
 		return nil
@@ -146,7 +146,7 @@ func (w *ActorWorkflow) ensureAteletTerminated(ctx context.Context, actorRef res
 			slog.String("templateNamespace", actor.GetActorTemplateNamespace()),
 			slog.String("templateName", actor.GetActorTemplateName()))
 		workloadSpec = &ateletpb.WorkloadSpec{}
-		for _, vol := range actor.GetActorVolumes() {
+		for _, vol := range actor.GetStatus().GetActorVolumes() {
 			// StorageVolumeId is only populated once the volume is provisioned.
 			// Skip volumes that were never created (e.g. failed during PENDING state).
 			if vol.GetStorageVolumeId() != "" {
@@ -199,7 +199,7 @@ func (w *ActorWorkflow) ensureWorkerReleased(ctx context.Context, actorRef resou
 	ctx, done := stepSpan(ctx, "ReleaseWorker")
 	defer func() { err = done(err) }()
 
-	if actor.GetWorkerAssignment() == nil {
+	if actor.GetStatus().GetWorkerAssignment() == nil {
 		markSkipped(ctx, "worker already released")
 		return actor, nil
 	}
@@ -209,7 +209,7 @@ func (w *ActorWorkflow) ensureWorkerReleased(ctx context.Context, actorRef resou
 		return nil, err
 	}
 
-	if latestActor.GetWorkerAssignment() != nil {
+	if latestActor.GetStatus().GetWorkerAssignment() != nil {
 		if _, err := releaseWorker(ctx, w.store, latestActor); err != nil {
 			return nil, err
 		}
@@ -220,8 +220,10 @@ func (w *ActorWorkflow) ensureWorkerReleased(ctx context.Context, actorRef resou
 		}
 
 		updatedActor, err := w.store.UpdateActor(ctx, actorRef, store.WithPrecondition(latestActor, func(dbActor *ateapipb.Actor) error {
-			dbActor.LocalSnapshotInfo = nil
-			dbActor.WorkerAssignment = nil
+			if dbActor.Status != nil {
+				dbActor.Status.LocalSnapshotInfo = nil
+				dbActor.Status.WorkerAssignment = nil
+			}
 			return nil
 		}))
 		if err != nil {
@@ -249,17 +251,17 @@ func (w *ActorWorkflow) ensureMarkedDeleting(ctx context.Context, actorRef resou
 	}
 	shouldDelete := false
 	switch st {
-	// Allow deletion for actors in `DELETING` status
+	// Allow deletion for actors in `DELETING` state
 	case ateapipb.ActorState_ACTOR_STATE_DELETING,
 		ateapipb.ActorState_ACTOR_STATE_SUSPENDED,
 		ateapipb.ActorState_ACTOR_STATE_CRASHED:
 		shouldDelete = true
 	default:
-		// This allows deletion for any status
+		// This allows deletion for any state
 		shouldDelete = anyState
 	}
 	if !shouldDelete {
-		return nil, status.Errorf(codes.FailedPrecondition, "Actor %s is not in a deletable status (status: %v)", actorRef, st)
+		return nil, status.Errorf(codes.FailedPrecondition, "Actor %s is not in a deletable state (state: %v)", actorRef, st)
 	}
 
 	storedActor, err := w.store.UpdateActor(ctx, actorRef, store.PreconditionFrom(actor), func(toUpdate *ateapipb.Actor) error {

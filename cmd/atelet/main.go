@@ -1222,6 +1222,10 @@ func (s *AteomHerder) Terminate(ctx context.Context, req *ateletpb.TerminateRequ
 	if err != nil {
 		slog.WarnContext(ctx, "failed to dial ateom for terminate, proceeding with volume unmount and dir reset", slog.Any("actor", actorRef), slog.String("actorUID", actorUID), slog.Any("err", err))
 	} else {
+		spec, err := buildAteomWorkloadSpec(req.GetSpec())
+		if err != nil {
+			return nil, status.Errorf(codes.InvalidArgument, "invalid workload spec: %v", err)
+		}
 		if _, err := client.TerminateWorkload(ctx, &ateompb.TerminateWorkloadRequest{
 			Atespace:               req.GetAtespace(),
 			ActorName:              req.GetActorName(),
@@ -1229,7 +1233,7 @@ func (s *AteomHerder) Terminate(ctx context.Context, req *ateletpb.TerminateRequ
 			ActorTemplateNamespace: req.GetActorTemplateNamespace(),
 			ActorTemplateName:      req.GetActorTemplateName(),
 			RunscPath:              runscPathFor(assetPaths),
-			Spec:                   buildAteomWorkloadSpec(req.GetSpec()),
+			Spec:                   spec,
 		}); err != nil {
 			if status.Code(err) == codes.NotFound {
 				slog.InfoContext(ctx, "workload not found on ateom during terminate", slog.Any("actor", actorRef), slog.String("actorUID", actorUID))
