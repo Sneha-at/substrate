@@ -434,7 +434,7 @@ func TestExternalVolumeLifecycle(t *testing.T) {
 }
 
 func TestDeleteActorAnyStateWithExternalVolume(t *testing.T) {
-	if isMicroVMEnvironment() {
+	if e2e.IsMicroVM() {
 		t.Skip("Skipping TestDeleteActorAnyStateWithExternalVolume for microVM environment")
 	}
 
@@ -461,7 +461,7 @@ func TestDeleteActorAnyStateWithExternalVolume(t *testing.T) {
 	}}); err != nil {
 		t.Fatalf("failed to create Actor: %v", err)
 	}
-	waitForActorStatus(ctx, t, clients, actorName, ateapipb.Actor_STATUS_SUSPENDED)
+	waitForActorState(ctx, t, clients, actorName, ateapipb.ActorState_ACTOR_STATE_SUSPENDED)
 
 	t.Logf("Resuming Actor %q...", actorName)
 	if _, err := clients.SubstrateAPI.ResumeActor(ctx, &ateapipb.ResumeActorRequest{
@@ -469,7 +469,7 @@ func TestDeleteActorAnyStateWithExternalVolume(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("failed to resume Actor: %v", err)
 	}
-	waitForActorStatus(ctx, t, clients, actorName, ateapipb.Actor_STATUS_RUNNING)
+	waitForActorState(ctx, t, clients, actorName, ateapipb.ActorState_ACTOR_STATE_RUNNING)
 
 	// Verify volume exists in actor (status should be CREATED)
 	actor, err := clients.SubstrateAPI.GetActor(ctx, &ateapipb.GetActorRequest{
@@ -478,10 +478,10 @@ func TestDeleteActorAnyStateWithExternalVolume(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to get actor: %v", err)
 	}
-	if len(actor.GetActorVolumes()) == 0 {
+	if len(actor.GetStatus().GetActorVolumes()) == 0 {
 		t.Fatalf("expected actor to have volumes, got 0")
 	}
-	for _, vol := range actor.GetActorVolumes() {
+	for _, vol := range actor.GetStatus().GetActorVolumes() {
 		if vol.Status != ateapipb.ExternalVolume_STATUS_CREATED {
 			t.Fatalf("expected volume %q to be CREATED, got %s", vol.VolumeName, vol.Status)
 		}
@@ -958,7 +958,7 @@ func deleteActorAnyState(ctx context.Context, t *testing.T, clients *e2e.Clients
 	}}); err != nil {
 		t.Fatalf("failed to create Actor: %v", err)
 	}
-	waitForActorStatus(ctx, t, clients, actorName, ateapipb.Actor_STATUS_SUSPENDED)
+	waitForActorState(ctx, t, clients, actorName, ateapipb.ActorState_ACTOR_STATE_SUSPENDED)
 
 	// Verify that any-state delete on a SUSPENDED actor succeeds
 	t.Logf("Attempting any-state delete on suspended Actor %q (should succeed)...", actorName)
@@ -978,7 +978,7 @@ func deleteActorAnyState(ctx context.Context, t *testing.T, clients *e2e.Clients
 	}}); err != nil {
 		t.Fatalf("failed to create Actor: %v", err)
 	}
-	waitForActorStatus(ctx, t, clients, actorName, ateapipb.Actor_STATUS_SUSPENDED)
+	waitForActorState(ctx, t, clients, actorName, ateapipb.ActorState_ACTOR_STATE_SUSPENDED)
 
 	t.Logf("Resuming Actor %q...", actorName)
 	if _, err := clients.SubstrateAPI.ResumeActor(ctx, &ateapipb.ResumeActorRequest{
@@ -986,7 +986,7 @@ func deleteActorAnyState(ctx context.Context, t *testing.T, clients *e2e.Clients
 	}); err != nil {
 		t.Fatalf("failed to resume Actor: %v", err)
 	}
-	waitForActorStatus(ctx, t, clients, actorName, ateapipb.Actor_STATUS_RUNNING)
+	waitForActorState(ctx, t, clients, actorName, ateapipb.ActorState_ACTOR_STATE_RUNNING)
 
 	// 3. Call the actor to ensure workload is actively serving on worker
 	resp, err := callActor(t, resources.ActorRef{Atespace: demoAtespace, Name: actorName})
@@ -1034,7 +1034,7 @@ func deleteActorAnyState(ctx context.Context, t *testing.T, clients *e2e.Clients
 			Actor: &ateapipb.ObjectRef{Atespace: demoAtespace, Name: actorName},
 		})
 	}()
-	waitForActorStatus(ctx, t, clients, actorName, ateapipb.Actor_STATUS_SUSPENDED)
+	waitForActorState(ctx, t, clients, actorName, ateapipb.ActorState_ACTOR_STATE_SUSPENDED)
 
 	return nil
 }
@@ -1051,7 +1051,7 @@ func deletePausedActorAnyState(ctx context.Context, t *testing.T, clients *e2e.C
 	}}); err != nil {
 		t.Fatalf("failed to create Actor: %v", err)
 	}
-	waitForActorStatus(ctx, t, clients, actorName, ateapipb.Actor_STATUS_SUSPENDED)
+	waitForActorState(ctx, t, clients, actorName, ateapipb.ActorState_ACTOR_STATE_SUSPENDED)
 
 	// 2. Resuming the actor
 	t.Logf("Resuming Actor %q...", actorName)
@@ -1060,7 +1060,7 @@ func deletePausedActorAnyState(ctx context.Context, t *testing.T, clients *e2e.C
 	}); err != nil {
 		t.Fatalf("failed to resume Actor: %v", err)
 	}
-	waitForActorStatus(ctx, t, clients, actorName, ateapipb.Actor_STATUS_RUNNING)
+	waitForActorState(ctx, t, clients, actorName, ateapipb.ActorState_ACTOR_STATE_RUNNING)
 
 	// 3. Pausing the actor
 	t.Logf("Pausing Actor %q...", actorName)
@@ -1069,7 +1069,7 @@ func deletePausedActorAnyState(ctx context.Context, t *testing.T, clients *e2e.C
 	}); err != nil {
 		t.Fatalf("failed to pause Actor: %v", err)
 	}
-	waitForActorStatus(ctx, t, clients, actorName, ateapipb.Actor_STATUS_PAUSED)
+	waitForActorState(ctx, t, clients, actorName, ateapipb.ActorState_ACTOR_STATE_PAUSED)
 
 	// 4. Delete the paused actor with any-state
 	t.Logf("Deleting paused Actor %q with any-state...", actorName)

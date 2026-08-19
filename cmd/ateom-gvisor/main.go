@@ -835,25 +835,33 @@ func isRunscNotFoundError(err error) bool {
 		strings.Contains(msg, "no such file or directory")
 }
 
-func (r *runsc) cleanupContainersAfterCheckpoint(ctx context.Context, containers []*ateompb.Container) error {
-	if r.path == "" {
-		return nil
-	}
+func (r *runsc) stopContainers(ctx context.Context, rcmd *runsc, containers []*ateompb.Container) {
 	for _, ctr := range containers {
 		_ = r.cmdKill(ctx, ctr.GetName(), "SIGKILL")
 		_ = r.cmdWait(ctx, ctr.GetName())
 	}
 	_ = r.cmdKill(ctx, "pause", "SIGKILL")
 	_ = r.cmdWait(ctx, "pause")
+}
+
+func (r *runsc) cleanupContainers(ctx context.Context, containers []*ateompb.Container) error {
+	if r.path == "" {
+		return nil
+	}
 
 	// Check state of all containers to mimic containerd.
 	//
 	// Without this, `runsc delete` occasionally throws an error.
-	_ = r.cmdState(ctx, "pause")
+	if err := r.cmdState(ctx, "pause"); err != nil {
+		return fmt.Errorf("while checking state of pause container: %w", err)
+	}
 	for _, ctr := range containers {
-		_ = r.cmdState(ctx, ctr.GetName())
+		if err := r.cmdState(ctx, ctr.GetName()); err != nil {
+			return fmt.Errorf("while checking state of %q application container: %w", ctr.GetName(), err)
+		}
 	}
 
+	// cleanupContainers is idempotent: if a container is already deleted, ignore the error and continue.
 	for _, ctr := range containers {
 		if err := r.cmdDelete(ctx, ctr.GetName()); err != nil {
 			if !isRunscNotFoundError(err) {
@@ -861,7 +869,7 @@ func (r *runsc) cleanupContainersAfterCheckpoint(ctx context.Context, containers
 			}
 		}
 	}
-
+	// cleanupContainers is idempotent: if a container is already deleted, ignore the error and continue.
 	if err := r.cmdDelete(ctx, "pause"); err != nil {
 		if !isRunscNotFoundError(err) {
 			return fmt.Errorf("while deleting pause container: %w", err)
@@ -1094,11 +1102,12 @@ func (s *AteomService) terminateWorkload(ctx context.Context, actorRef resources
 		actorUID: actorUID,
 	}
 
-	// After checkpointing the sandbox root, runsc may no longer have a usable
-	// control server for state/delete calls. Keep this as best-effort cleanup:
+	// Stop the containers before deleting them, to avoid leaving a live container with no bundle on disk. Best-effort: if the containers are already stopped, the delete will succeed anyway.
+	rcmd.stopContainers(ctx, rcmd, containers)
+	// Keep this as best-effort cleanup:
 	// atelet resets the actor runsc, bundle, pidfile, and checkpoint
 	// directories after uploading the snapshot.
-	if err := rcmd.cleanupContainersAfterCheckpoint(ctx, containers); err != nil {
+	if err := rcmd.cleanupContainers(ctx, containers); err != nil {
 		errs = append(errs, fmt.Errorf("while cleaning up runsc containers: %w", err))
 	}
 
