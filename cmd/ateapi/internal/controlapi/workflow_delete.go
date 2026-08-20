@@ -47,7 +47,9 @@ func (w *ActorWorkflow) DeleteActor(ctx context.Context, actorRef resources.Acto
 		return nil, err
 	}
 
-	// DeleteActor will attempt the best effort cleanup, we will log errors if something fails but will continue to delete the actor from the store.
+	// DeleteActor will attempt best-effort cleanup across all steps, collecting any errors.
+	// If any step fails, errors are returned so the caller can retry, and the actor record
+	// is retained in the store in the DELETING state.
 	// TODO: Ensure GC collects all the remaining resources if the cleanup fails.
 	var errs []error
 	actorTemplate := (*atev1alpha1.ActorTemplate)(nil)
@@ -69,7 +71,7 @@ func (w *ActorWorkflow) DeleteActor(ctx context.Context, actorRef resources.Acto
 		errs = append(errs, volumesDetachedErr)
 	}
 
-	// Release worker if atelet termination and volume detachment did not fail (or if anyState is true).
+	// Release worker if atelet termination and volume detachment did not fail.
 	if atletTerminatedErr == nil && volumesDetachedErr == nil {
 		if actor, err = w.ensureWorkerReleased(ctx, actorRef, actor); err != nil {
 			errs = append(errs, fmt.Errorf("while releasing worker: %w", err))
@@ -115,6 +117,24 @@ func (w *ActorWorkflow) ensureAteletTerminated(ctx context.Context, actorRef res
 	if assignment == nil {
 		slog.InfoContext(ctx, "actor has no worker assignment, skipping atlet terminate request", slog.Any("actor", actorRef))
 		return nil
+	}
+
+	if workerName := assignment.GetWorker().GetName(); workerName != "" {
+		worker, err := w.store.GetWorker(ctx, workerName)
+		if err != nil {
+			if errors.Is(err, store.ErrNotFound) {
+				slog.InfoContext(ctx, "worker not found in store, skipping atelet terminate request", slog.String("worker", workerName), slog.Any("actor", actorRef))
+				return nil
+			}
+			return fmt.Errorf("while checking worker assignment: %w", err)
+		}
+		wass := worker.GetStatus().GetAssignment()
+		if wass == nil || wass.GetActorUid() != actor.GetMetadata().GetUid() {
+			slog.InfoContext(ctx, "worker is no longer assigned to this actor, skipping atelet terminate request",
+				slog.String("worker", workerName),
+				slog.Any("actor", actorRef))
+			return nil
+		}
 	}
 
 	workerPodNs := assignment.GetWorkerNamespace()
