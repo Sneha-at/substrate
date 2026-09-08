@@ -423,10 +423,6 @@ func TestExternalVolumeLifecycle(t *testing.T) {
 }
 
 func TestDeleteActorAnyStateWithExternalVolume(t *testing.T) {
-	if e2e.IsMicroVM() {
-		t.Skip("Skipping TestDeleteActorAnyStateWithExternalVolume for microVM environment")
-	}
-
 	ctx := context.Background()
 	clients := e2e.GetClients()
 	nsObj := e2e.CreateNamespace(t)
