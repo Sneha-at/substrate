@@ -262,3 +262,15 @@ func (f *FakeAteletServer) lastRestoreRequest() *ateletpb.RestoreRequest {
 	}
 	return proto.Clone(f.RestoreRequest).(*ateletpb.RestoreRequest)
 }
+
+func (f *FakeAteletServer) Terminate(ctx context.Context, req *ateletpb.TerminateRequest) (*ateletpb.TerminateResponse, error) {
+	f.Lock.Lock()
+	defer f.Lock.Unlock()
+
+	f.TerminateCalled = true
+	f.TerminateRequest = proto.Clone(req).(*ateletpb.TerminateRequest)
+	if f.FailTerminate != nil {
+		return nil, f.FailTerminate
+	}
+	return &ateletpb.TerminateResponse{}, nil
+}
