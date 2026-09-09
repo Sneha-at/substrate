@@ -1286,6 +1286,107 @@ func TestDeleteActor_MultipleVolumeDeletionFailures(t *testing.T) {
 	}
 }
 
+// retryDeleteVolumePlugin simulates a CSI control-plane plugin that fails DeleteVolume
+// until failDelete is cleared, recording all deleted volume IDs for assertions.
+type retryDeleteVolumePlugin struct {
+	volume.VolumePluginControlPlane
+	mu         sync.Mutex
+	failDelete bool
+	deletedIDs []string
+}
+
+func (r *retryDeleteVolumePlugin) DeleteVolume(ctx context.Context, volumeID string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.deletedIDs = append(r.deletedIDs, volumeID)
+	if r.failDelete {
+		return fmt.Errorf("simulated temporary delete error for %s", volumeID)
+	}
+	return nil
+}
+
+// TestDeleteActor_VolumeDeletionFailure_RetrySuccess tests that when volume deletion fails
+// during DeleteActor, the actor transitions to ACTOR_STATE_DELETING and its volumes to
+// ExternalVolume_STATUS_DELETING, and a subsequent retry of DeleteActor cleanly finalizes deletion.
+//
+// Workflow:
+// 1. Creates a suspended actor with a provisioned external volume.
+// 2. Calls DeleteActor, which fails because the CSI plugin returns an error on DeleteVolume.
+// 3. Verifies that the actor is persisted in ACTOR_STATE_DELETING and the volume is marked STATUS_DELETING.
+// 4. Clears the plugin error to simulate backend recovery.
+// 5. Retries DeleteActor, which re-attempts volume deletion and cleans up the actor from the store.
+// 6. Confirms GetActor returns NotFound.
+func TestDeleteActor_VolumeDeletionFailure_RetrySuccess(t *testing.T) {
+	ns := namespaceForTest("ns-delete-vol-retry")
+	plugin := &retryDeleteVolumePlugin{failDelete: true}
+	tc := setupTestWithVolumePlugins(t, ns, map[string]volume.VolumePluginControlPlane{
+		"substrate.io/mock": plugin,
+	})
+	defer tc.cleanup()
+	createTemplate(t, tc, ns)
+
+	// 1. Create suspended actor with a provisioned external volume.
+	actor := &ateapipb.Actor{
+		Metadata: &ateapipb.ResourceMetadata{
+			Atespace: testAtespace,
+			Name:     "delete-retry-actor",
+		},
+		ActorTemplate: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "tmpl1"},
+		Status: &ateapipb.ActorStatus{
+			State: ateapipb.ActorState_ACTOR_STATE_SUSPENDED,
+			ActorVolumes: []*ateapipb.ExternalVolume{
+				{VolumeName: "vol1", StorageVolumeId: "storage-vol-1", Status: ateapipb.ExternalVolume_STATUS_CREATED, VolumeType: "substrate.io/mock"},
+			},
+		},
+	}
+	if _, err := tc.persistence.CreateActor(context.Background(), actor); err != nil {
+		t.Fatalf("CreateActor: %v", err)
+	}
+
+	// 2. First DeleteActor call should fail due to DeleteVolume error.
+	_, err := tc.service.DeleteActor(context.Background(), &ateapipb.DeleteActorRequest{
+		Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "delete-retry-actor"},
+	})
+	if err == nil {
+		t.Fatalf("expected DeleteActor to fail, but got nil")
+	}
+
+	// 3. Verify actor is persisted in ACTOR_STATE_DELETING with volume in ExternalVolume_STATUS_DELETING.
+	getResp, err := tc.service.GetActor(context.Background(), &ateapipb.GetActorRequest{
+		Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "delete-retry-actor"},
+	})
+	if err != nil {
+		t.Fatalf("GetActor after failed delete: %v", err)
+	}
+	if getResp.GetStatus().GetState() != ateapipb.ActorState_ACTOR_STATE_DELETING {
+		t.Errorf("actor state = %v, want ACTOR_STATE_DELETING", getResp.GetStatus().GetState())
+	}
+	if len(getResp.GetStatus().GetActorVolumes()) != 1 || getResp.GetStatus().GetActorVolumes()[0].GetStatus() != ateapipb.ExternalVolume_STATUS_DELETING {
+		t.Errorf("actor volume status = %v, want STATUS_DELETING", getResp.GetStatus().GetActorVolumes())
+	}
+
+	// 4. Recover the CSI plugin to simulate backend recovery.
+	plugin.mu.Lock()
+	plugin.failDelete = false
+	plugin.mu.Unlock()
+
+	// 5. Second DeleteActor call (retry) re-attempts deletion and should succeed.
+	_, err = tc.service.DeleteActor(context.Background(), &ateapipb.DeleteActorRequest{
+		Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "delete-retry-actor"},
+	})
+	if err != nil {
+		t.Fatalf("expected retry DeleteActor to succeed, got: %v", err)
+	}
+
+	// 6. Verify actor is removed from store.
+	_, err = tc.service.GetActor(context.Background(), &ateapipb.GetActorRequest{
+		Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "delete-retry-actor"},
+	})
+	if status.Code(err) != codes.NotFound {
+		t.Errorf("GetActor after successful delete retry = %v, want NotFound", err)
+	}
+}
+
 func TestCreateActor_AtespaceNotFound(t *testing.T) {
 	ns := namespaceForTest("ns-create-actor-no-atespace")
 	tc := setupTest(t, ns)
@@ -1979,6 +2080,666 @@ func TestResumeActor_VolumeAttachFailure_DeleteActor(t *testing.T) {
 	})
 	if status.Code(err) != codes.NotFound {
 		t.Errorf("GetActor after DeleteActor err = %v, want NotFound", err)
+	}
+}
+
+// multiVolAttachPlugin simulates a CSI control-plane plugin that selectively fails
+// volume attachment for a specified volume up to a configured number of attempts.
+type multiVolAttachPlugin struct {
+	volume.VolumePluginControlPlane
+	mu             sync.Mutex
+	attachAttempts map[string]int
+	failVol        string
+	failUntil      int
+	attachedNodes  map[string][]string
+	detachedNodes  map[string][]string
+	deleted        []string
+}
+
+func newMultiVolAttachPlugin(failVol string, failUntil int) *multiVolAttachPlugin {
+	return &multiVolAttachPlugin{
+		attachAttempts: make(map[string]int),
+		failVol:        failVol,
+		failUntil:      failUntil,
+		attachedNodes:  make(map[string][]string),
+		detachedNodes:  make(map[string][]string),
+	}
+}
+
+func (m *multiVolAttachPlugin) CreateVolume(ctx context.Context, name, capacity, driverName string, parameters map[string]string) (string, map[string]string, error) {
+	return "storage-" + name, parameters, nil
+}
+
+func (m *multiVolAttachPlugin) AttachVolume(ctx context.Context, volumeID, node string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.attachAttempts[volumeID]++
+	if strings.Contains(volumeID, m.failVol) && m.attachAttempts[volumeID] <= m.failUntil {
+		return fmt.Errorf("simulated volume attach failure for %s on attempt %d", volumeID, m.attachAttempts[volumeID])
+	}
+	m.attachedNodes[volumeID] = append(m.attachedNodes[volumeID], node)
+	return nil
+}
+
+func (m *multiVolAttachPlugin) DetachVolume(ctx context.Context, volumeID, node string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.detachedNodes[volumeID] = append(m.detachedNodes[volumeID], node)
+	return nil
+}
+
+func (m *multiVolAttachPlugin) DeleteVolume(ctx context.Context, volumeID string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.deleted = append(m.deleted, volumeID)
+	return nil
+}
+
+// TestResumeActor_MultiVolumePartialAttachFailure_Retry tests scenario B:
+// when an actor has multiple external volumes and one fails to attach during ResumeActor:
+// 1. ResumeActor fails, leaving the actor in ACTOR_STATE_RESUMING.
+// 2. The successfully attached volume remains attached; the failing volume is not attached.
+// 3. The worker assignment remains held by the actor.
+// 4. A subsequent retry of ResumeActor re-attempts attachment, succeeds, and transitions the actor to ACTOR_STATE_RUNNING.
+//
+// Workflow:
+// 1. Creates a template with two external volumes (vol1, vol2) and creates a mock worker pod on node1.
+// 2. Creates an actor referencing the template.
+// 3. Calls ResumeActor; plugin is configured to fail vol2 on attempt 1.
+// 4. Verifies ResumeActor returns an error, actor is in ACTOR_STATE_RESUMING, worker assignment is held, and vol1 is attached while vol2 is not.
+// 5. Calls ResumeActor a second time (retry).
+// 6. Verifies ResumeActor succeeds and actor transitions to ACTOR_STATE_RUNNING.
+// 7. Cleans up by suspending and deleting the actor.
+func TestResumeActor_MultiVolumePartialAttachFailure_Retry(t *testing.T) {
+	ns := namespaceForTest("ns-resume-multivol-attach-retry")
+	plugin := newMultiVolAttachPlugin("vol2", 1)
+	tc := setupTestWithVolumePlugins(t, ns, map[string]volume.VolumePluginControlPlane{
+		"substrate.io/mock": plugin,
+	})
+	defer tc.cleanup()
+
+	// 1. Create a template with two external volumes and a worker pod.
+	volumes := []*ateapipb.Volume{
+		{
+			Name: "vol1",
+			ExternalVolumeTemplate: &ateapipb.ExternalVolumeTemplate{
+				StorageClassName: "standard",
+				Capacity:         "10Gi",
+			},
+		},
+		{
+			Name: "vol2",
+			ExternalVolumeTemplate: &ateapipb.ExternalVolumeTemplate{
+				StorageClassName: "standard",
+				Capacity:         "10Gi",
+			},
+		},
+	}
+	mounts := []*ateapipb.VolumeMount{
+		{Name: "vol1", MountPath: "/mnt/vol1"},
+		{Name: "vol2", MountPath: "/mnt/vol2"},
+	}
+	createTemplateWithVolumes(t, tc, ns, volumes, mounts)
+	createWorkerPod(t, tc, ns, "worker-1", "node1", "pool1")
+
+	// 2. Create the actor.
+	_, err := tc.client.CreateActor(context.Background(), &ateapipb.CreateActorRequest{
+		Actor: &ateapipb.Actor{
+			Metadata:      &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: "multi-attach-actor"},
+			ActorTemplate: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "tmpl1"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("CreateActor failed: %v", err)
+	}
+
+	// 3. Attempt 1: vol1 attaches, vol2 fails attach.
+	_, err = tc.client.ResumeActor(context.Background(), &ateapipb.ResumeActorRequest{
+		Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "multi-attach-actor"},
+	})
+	if err == nil {
+		t.Fatalf("expected ResumeActor to fail due to partial attach failure, got nil")
+	}
+	if !strings.Contains(err.Error(), "simulated volume attach failure for") {
+		t.Errorf("expected error containing simulated attach failure, got: %v", err)
+	}
+
+	// 4. Verify actor state is ACTOR_STATE_RESUMING, worker assignment is held, and partial attachment state.
+	getResp, err := tc.client.GetActor(context.Background(), &ateapipb.GetActorRequest{
+		Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "multi-attach-actor"},
+	})
+	if err != nil {
+		t.Fatalf("GetActor after failed attach: %v", err)
+	}
+	if getResp.GetStatus().GetState() != ateapipb.ActorState_ACTOR_STATE_RESUMING {
+		t.Errorf("actor state = %v, want ACTOR_STATE_RESUMING", getResp.GetStatus().GetState())
+	}
+	if getResp.GetStatus().GetWorkerAssignment() == nil || getResp.GetStatus().GetWorkerAssignment().GetWorkerPod() != "worker-1" {
+		t.Errorf("worker assignment = %v, want worker-1", getResp.GetStatus().GetWorkerAssignment())
+	}
+
+	// Verify vol1 was attached, vol2 was not attached on attempt 1.
+	actorUID := getResp.GetMetadata().GetUid()
+	vol1ID := "storage-substrate-" + actorUID + "-vol1"
+	vol2ID := "storage-substrate-" + actorUID + "-vol2"
+	plugin.mu.Lock()
+	if len(plugin.attachedNodes[vol1ID]) != 1 || plugin.attachedNodes[vol1ID][0] != "node1" {
+		t.Errorf("vol1 attached nodes = %v, want [node1]", plugin.attachedNodes[vol1ID])
+	}
+	if len(plugin.attachedNodes[vol2ID]) != 0 {
+		t.Errorf("vol2 attached nodes = %v, want empty on attempt 1", plugin.attachedNodes[vol2ID])
+	}
+	plugin.mu.Unlock()
+
+	// 5. Attempt 2 (retry): re-attempts attach, both succeed, actor reaches RUNNING.
+	_, err = tc.client.ResumeActor(context.Background(), &ateapipb.ResumeActorRequest{
+		Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "multi-attach-actor"},
+	})
+	if err != nil {
+		t.Fatalf("expected second ResumeActor to succeed, got: %v", err)
+	}
+
+	// 6. Verify actor state is RUNNING.
+	getResp, err = tc.client.GetActor(context.Background(), &ateapipb.GetActorRequest{
+		Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "multi-attach-actor"},
+	})
+	if err != nil {
+		t.Fatalf("GetActor after second resume: %v", err)
+	}
+	if getResp.GetStatus().GetState() != ateapipb.ActorState_ACTOR_STATE_RUNNING {
+		t.Errorf("actor state after retry = %v, want ACTOR_STATE_RUNNING", getResp.GetStatus().GetState())
+	}
+
+	// 7. Clean up by suspending and deleting.
+	_, err = tc.client.SuspendActor(context.Background(), &ateapipb.SuspendActorRequest{
+		Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "multi-attach-actor"},
+	})
+	if err != nil {
+		t.Fatalf("SuspendActor failed: %v", err)
+	}
+	_, err = tc.client.DeleteActor(context.Background(), &ateapipb.DeleteActorRequest{
+		Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "multi-attach-actor"},
+	})
+	if err != nil {
+		t.Fatalf("DeleteActor failed: %v", err)
+	}
+}
+
+// detachFailVolumePlugin simulates a CSI control-plane plugin that fails DetachVolume
+// for a configured number of attempts, tracking attached and detached nodes.
+type detachFailVolumePlugin struct {
+	volume.VolumePluginControlPlane
+	mu             sync.Mutex
+	detachAttempts int
+	failUntil      int
+	attachedNodes  []string
+	detachedNodes  []string
+	deleted        []string
+}
+
+func (d *detachFailVolumePlugin) CreateVolume(ctx context.Context, name, capacity, driverName string, parameters map[string]string) (string, map[string]string, error) {
+	return "storage-" + name, parameters, nil
+}
+
+func (d *detachFailVolumePlugin) AttachVolume(ctx context.Context, volumeID, node string) error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.attachedNodes = append(d.attachedNodes, node)
+	return nil
+}
+
+func (d *detachFailVolumePlugin) DetachVolume(ctx context.Context, volumeID, node string) error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.detachAttempts++
+	if d.detachAttempts <= d.failUntil {
+		return fmt.Errorf("simulated volume detach failure on attempt %d", d.detachAttempts)
+	}
+	d.detachedNodes = append(d.detachedNodes, node)
+	return nil
+}
+
+func (d *detachFailVolumePlugin) DeleteVolume(ctx context.Context, volumeID string) error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.deleted = append(d.deleted, volumeID)
+	return nil
+}
+
+// TestSuspendActor_VolumeDetachFailure_RetrySuccess tests scenario C:
+// when volume detachment fails during SuspendActor:
+// 1. SuspendActor fails, leaving the actor in ACTOR_STATE_SUSPENDING.
+// 2. The worker assignment is preserved (worker is not released).
+// 3. A subsequent retry of SuspendActor succeeds, detaches the volume, releases the worker, and transitions the actor to ACTOR_STATE_SUSPENDED.
+//
+// Workflow:
+// 1. Creates a template with an external volume and creates a mock worker pod on node1.
+// 2. Creates and resumes an actor to ACTOR_STATE_RUNNING (attaching the volume).
+// 3. Calls SuspendActor; plugin is configured to fail DetachVolume on attempt 1.
+// 4. Verifies SuspendActor returns an error, actor state is ACTOR_STATE_SUSPENDING, and worker assignment is preserved.
+// 5. Calls SuspendActor a second time (retry); detachment succeeds.
+// 6. Verifies actor transitions to ACTOR_STATE_SUSPENDED and worker assignment is cleared.
+// 7. Cleans up by deleting the actor.
+func TestSuspendActor_VolumeDetachFailure_RetrySuccess(t *testing.T) {
+	ns := namespaceForTest("ns-suspend-vol-detach-retry")
+	plugin := &detachFailVolumePlugin{failUntil: 1}
+	tc := setupTestWithVolumePlugins(t, ns, map[string]volume.VolumePluginControlPlane{
+		"substrate.io/mock": plugin,
+	})
+	defer tc.cleanup()
+
+	// 1. Create template with external volume and a mock worker pod.
+	volumes := []*ateapipb.Volume{
+		{
+			Name: "vol1",
+			ExternalVolumeTemplate: &ateapipb.ExternalVolumeTemplate{
+				StorageClassName: "standard",
+				Capacity:         "10Gi",
+			},
+		},
+	}
+	mounts := []*ateapipb.VolumeMount{
+		{Name: "vol1", MountPath: "/mnt/vol1"},
+	}
+	createTemplateWithVolumes(t, tc, ns, volumes, mounts)
+	createWorkerPod(t, tc, ns, "worker-1", "node1", "pool1")
+
+	// 2. Create and resume actor to ACTOR_STATE_RUNNING.
+	_, err := tc.client.CreateActor(context.Background(), &ateapipb.CreateActorRequest{
+		Actor: &ateapipb.Actor{
+			Metadata:      &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: "suspend-detach-retry-actor"},
+			ActorTemplate: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "tmpl1"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("CreateActor failed: %v", err)
+	}
+
+	_, err = tc.client.ResumeActor(context.Background(), &ateapipb.ResumeActorRequest{
+		Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "suspend-detach-retry-actor"},
+	})
+	if err != nil {
+		t.Fatalf("ResumeActor failed: %v", err)
+	}
+
+	// 3. Attempt 1: SuspendActor fails on DetachVolume.
+	_, err = tc.client.SuspendActor(context.Background(), &ateapipb.SuspendActorRequest{
+		Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "suspend-detach-retry-actor"},
+	})
+	if err == nil {
+		t.Fatalf("expected first SuspendActor to fail, got nil")
+	}
+	if !strings.Contains(err.Error(), "simulated volume detach failure on attempt 1") {
+		t.Errorf("expected error containing simulated detach failure, got: %v", err)
+	}
+
+	// 4. Verify actor state after failed detach: left in ACTOR_STATE_SUSPENDING, worker assignment preserved.
+	getResp, err := tc.client.GetActor(context.Background(), &ateapipb.GetActorRequest{
+		Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "suspend-detach-retry-actor"},
+	})
+	if err != nil {
+		t.Fatalf("GetActor after failed detach: %v", err)
+	}
+	if getResp.GetStatus().GetState() != ateapipb.ActorState_ACTOR_STATE_SUSPENDING {
+		t.Errorf("actor state = %v, want ACTOR_STATE_SUSPENDING", getResp.GetStatus().GetState())
+	}
+	if getResp.GetStatus().GetWorkerAssignment() == nil || getResp.GetStatus().GetWorkerAssignment().GetWorkerPod() != "worker-1" {
+		t.Errorf("worker assignment = %v, want worker-1", getResp.GetStatus().GetWorkerAssignment())
+	}
+
+	// 5. Attempt 2 (retry): SuspendActor retry succeeds, volume is detached.
+	_, err = tc.client.SuspendActor(context.Background(), &ateapipb.SuspendActorRequest{
+		Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "suspend-detach-retry-actor"},
+	})
+	if err != nil {
+		t.Fatalf("expected retry SuspendActor to succeed, got: %v", err)
+	}
+
+	// 6. Verify actor state transitions to ACTOR_STATE_SUSPENDED and worker is released.
+	getResp, err = tc.client.GetActor(context.Background(), &ateapipb.GetActorRequest{
+		Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "suspend-detach-retry-actor"},
+	})
+	if err != nil {
+		t.Fatalf("GetActor after successful suspend retry: %v", err)
+	}
+	if getResp.GetStatus().GetState() != ateapipb.ActorState_ACTOR_STATE_SUSPENDED {
+		t.Errorf("actor state = %v, want ACTOR_STATE_SUSPENDED", getResp.GetStatus().GetState())
+	}
+	if getResp.GetStatus().GetWorkerAssignment() != nil && getResp.GetStatus().GetWorkerAssignment().GetWorkerPod() != "" {
+		t.Errorf("worker assignment = %v, want worker released", getResp.GetStatus().GetWorkerAssignment())
+	}
+
+	// 7. Clean up by deleting actor.
+	_, err = tc.client.DeleteActor(context.Background(), &ateapipb.DeleteActorRequest{
+		Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "suspend-detach-retry-actor"},
+	})
+	if err != nil {
+		t.Fatalf("DeleteActor failed: %v", err)
+	}
+}
+
+// TestSuspendActor_VolumeDetachFailure_DeleteActorAnyState tests scenario C:
+// when volume detachment fails during SuspendActor and leaves the actor in ACTOR_STATE_SUSPENDING:
+// 1. Standard DeleteActor (without AnyState) fails with FailedPrecondition because SUSPENDING is not deletable.
+// 2. DeleteActor with AnyState=true succeeds, tearing down the actor and its volumes.
+//
+// Workflow:
+// 1. Creates a template with an external volume and creates a mock worker pod on node1.
+// 2. Creates and resumes an actor to ACTOR_STATE_RUNNING.
+// 3. Calls SuspendActor, which fails due to simulated volume detachment failure, leaving the actor in ACTOR_STATE_SUSPENDING.
+// 4. Calls DeleteActor without AnyState and verifies it is rejected with FailedPrecondition ("is not in a deletable state").
+// 5. Resets the plugin to allow detachment, then calls DeleteActor with AnyState=true.
+// 6. Verifies the actor is deleted and GetActor returns NotFound.
+func TestSuspendActor_VolumeDetachFailure_DeleteActorAnyState(t *testing.T) {
+	ns := namespaceForTest("ns-suspend-vol-detach-del")
+	plugin := &detachFailVolumePlugin{failUntil: 100}
+	tc := setupTestWithVolumePlugins(t, ns, map[string]volume.VolumePluginControlPlane{
+		"substrate.io/mock": plugin,
+	})
+	defer tc.cleanup()
+
+	// 1. Create template with external volume and a mock worker pod.
+	volumes := []*ateapipb.Volume{
+		{
+			Name: "vol1",
+			ExternalVolumeTemplate: &ateapipb.ExternalVolumeTemplate{
+				StorageClassName: "standard",
+				Capacity:         "10Gi",
+			},
+		},
+	}
+	mounts := []*ateapipb.VolumeMount{
+		{Name: "vol1", MountPath: "/mnt/vol1"},
+	}
+	createTemplateWithVolumes(t, tc, ns, volumes, mounts)
+	createWorkerPod(t, tc, ns, "worker-1", "node1", "pool1")
+
+	// 2. Create and resume actor to ACTOR_STATE_RUNNING.
+	_, err := tc.client.CreateActor(context.Background(), &ateapipb.CreateActorRequest{
+		Actor: &ateapipb.Actor{
+			Metadata:      &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: "suspend-del-actor"},
+			ActorTemplate: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "tmpl1"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("CreateActor failed: %v", err)
+	}
+
+	if _, err := tc.client.ResumeActor(context.Background(), &ateapipb.ResumeActorRequest{
+		Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "suspend-del-actor"},
+	}); err != nil {
+		t.Fatalf("ResumeActor failed: %v", err)
+	}
+
+	// 3. Attempt SuspendActor; fails on volume detachment, leaving actor in ACTOR_STATE_SUSPENDING.
+	_, err = tc.client.SuspendActor(context.Background(), &ateapipb.SuspendActorRequest{
+		Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "suspend-del-actor"},
+	})
+	if err == nil {
+		t.Fatalf("expected SuspendActor to fail, got nil")
+	}
+
+	getResp, err := tc.client.GetActor(context.Background(), &ateapipb.GetActorRequest{
+		Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "suspend-del-actor"},
+	})
+	if err != nil {
+		t.Fatalf("GetActor failed: %v", err)
+	}
+	if getResp.GetStatus().GetState() != ateapipb.ActorState_ACTOR_STATE_SUSPENDING {
+		t.Fatalf("actor state = %v, want ACTOR_STATE_SUSPENDING", getResp.GetStatus().GetState())
+	}
+
+	// 4. DeleteActor without AnyState fails with FailedPrecondition.
+	_, err = tc.client.DeleteActor(context.Background(), &ateapipb.DeleteActorRequest{
+		Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "suspend-del-actor"},
+	})
+	assertGrpcErrorRegex(t, err, codes.FailedPrecondition, "is not in a deletable state")
+
+	// 5. Allow detach to succeed and call DeleteActor with AnyState=true.
+	plugin.mu.Lock()
+	plugin.failUntil = 0
+	plugin.mu.Unlock()
+
+	_, err = tc.client.DeleteActor(context.Background(), &ateapipb.DeleteActorRequest{
+		Actor:    &ateapipb.ObjectRef{Atespace: testAtespace, Name: "suspend-del-actor"},
+		AnyState: true,
+	})
+	if err != nil {
+		t.Fatalf("DeleteActor with AnyState failed: %v", err)
+	}
+
+	// 6. Verify actor is NotFound.
+	_, err = tc.client.GetActor(context.Background(), &ateapipb.GetActorRequest{
+		Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "suspend-del-actor"},
+	})
+	if status.Code(err) != codes.NotFound {
+		t.Errorf("GetActor after delete err = %v, want NotFound", err)
+	}
+}
+
+// TestPauseActor_VolumeLifecycle_DetachAndResumeAttach tests scenario D:
+// external volume lifecycle across PauseActor and ResumeActor:
+// 1. When an actor is resumed to RUNNING, external volumes are attached to the worker node.
+// 2. When the actor is paused, volumes are detached from the worker node and the actor transitions to ACTOR_STATE_PAUSED.
+// 3. When the actor is resumed from PAUSED, volumes are re-attached to the worker node and the actor transitions to ACTOR_STATE_RUNNING.
+//
+// Workflow:
+// 1. Creates a template with an external volume and creates a mock worker pod on node1.
+// 2. Creates and resumes an actor to ACTOR_STATE_RUNNING; verifies volume is attached to node1.
+// 3. Calls PauseActor; verifies volume is detached from node1 and actor transitions to ACTOR_STATE_PAUSED.
+// 4. Calls ResumeActor from PAUSED; verifies volume is re-attached to node1 and actor transitions to ACTOR_STATE_RUNNING.
+// 5. Cleans up by suspending and deleting the actor.
+func TestPauseActor_VolumeLifecycle_DetachAndResumeAttach(t *testing.T) {
+	ns := namespaceForTest("ns-pause-vol-lifecycle")
+	plugin := &attachFailVolumePlugin{}
+	tc := setupTestWithVolumePlugins(t, ns, map[string]volume.VolumePluginControlPlane{
+		"substrate.io/mock": plugin,
+	})
+	defer tc.cleanup()
+
+	// 1. Create template with external volume and a mock worker pod.
+	volumes := []*ateapipb.Volume{
+		{
+			Name: "vol1",
+			ExternalVolumeTemplate: &ateapipb.ExternalVolumeTemplate{
+				StorageClassName: "standard",
+				Capacity:         "10Gi",
+			},
+		},
+	}
+	mounts := []*ateapipb.VolumeMount{
+		{Name: "vol1", MountPath: "/mnt/vol1"},
+	}
+	createTemplateWithVolumes(t, tc, ns, volumes, mounts)
+	createWorkerPod(t, tc, ns, "worker-1", "node1", "pool1")
+
+	// 2. Create actor and resume to RUNNING; volume is attached to node1.
+	_, err := tc.client.CreateActor(context.Background(), &ateapipb.CreateActorRequest{
+		Actor: &ateapipb.Actor{
+			Metadata:      &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: "pause-vol-actor"},
+			ActorTemplate: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "tmpl1"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("CreateActor failed: %v", err)
+	}
+
+	_, err = tc.client.ResumeActor(context.Background(), &ateapipb.ResumeActorRequest{
+		Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "pause-vol-actor"},
+	})
+	if err != nil {
+		t.Fatalf("ResumeActor failed: %v", err)
+	}
+	plugin.mu.Lock()
+	if diff := cmp.Diff([]string{"node1"}, plugin.attachedNodes); diff != "" {
+		t.Errorf("attached nodes after resume mismatch (-want +got):\n%s", diff)
+	}
+	plugin.mu.Unlock()
+
+	// 3. PauseActor: volume is detached from node1 and actor transitions to ACTOR_STATE_PAUSED.
+	_, err = tc.client.PauseActor(context.Background(), &ateapipb.PauseActorRequest{
+		Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "pause-vol-actor"},
+	})
+	if err != nil {
+		t.Fatalf("PauseActor failed: %v", err)
+	}
+
+	getResp, err := tc.client.GetActor(context.Background(), &ateapipb.GetActorRequest{
+		Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "pause-vol-actor"},
+	})
+	if err != nil {
+		t.Fatalf("GetActor failed: %v", err)
+	}
+	if getResp.GetStatus().GetState() != ateapipb.ActorState_ACTOR_STATE_PAUSED {
+		t.Errorf("actor state = %v, want ACTOR_STATE_PAUSED", getResp.GetStatus().GetState())
+	}
+	plugin.mu.Lock()
+	if diff := cmp.Diff([]string{"node1"}, plugin.detachedNodes); diff != "" {
+		t.Errorf("detached nodes after pause mismatch (-want +got):\n%s", diff)
+	}
+	plugin.mu.Unlock()
+
+	// 4. ResumeActor from PAUSED: volume is re-attached to node1 and actor transitions to ACTOR_STATE_RUNNING.
+	_, err = tc.client.ResumeActor(context.Background(), &ateapipb.ResumeActorRequest{
+		Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "pause-vol-actor"},
+	})
+	if err != nil {
+		t.Fatalf("ResumeActor from PAUSED failed: %v", err)
+	}
+
+	getResp, err = tc.client.GetActor(context.Background(), &ateapipb.GetActorRequest{
+		Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "pause-vol-actor"},
+	})
+	if err != nil {
+		t.Fatalf("GetActor after second resume: %v", err)
+	}
+	if getResp.GetStatus().GetState() != ateapipb.ActorState_ACTOR_STATE_RUNNING {
+		t.Errorf("actor state after retry = %v, want ACTOR_STATE_RUNNING", getResp.GetStatus().GetState())
+	}
+	plugin.mu.Lock()
+	// Should have attached twice: first resume + resume from pause
+	if diff := cmp.Diff([]string{"node1", "node1"}, plugin.attachedNodes); diff != "" {
+		t.Errorf("attached nodes after resume from pause mismatch (-want +got):\n%s", diff)
+	}
+	plugin.mu.Unlock()
+
+	// 5. Clean up by suspending and deleting the actor.
+	_, err = tc.client.SuspendActor(context.Background(), &ateapipb.SuspendActorRequest{
+		Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "pause-vol-actor"},
+	})
+	if err != nil {
+		t.Fatalf("SuspendActor failed: %v", err)
+	}
+	_, err = tc.client.DeleteActor(context.Background(), &ateapipb.DeleteActorRequest{
+		Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "pause-vol-actor"},
+	})
+	if err != nil {
+		t.Fatalf("DeleteActor failed: %v", err)
+	}
+}
+
+// TestPauseActor_VolumeDetachFailure_RetrySuccess tests scenario D:
+// when volume detachment fails during PauseActor:
+// 1. PauseActor fails, leaving the actor in ACTOR_STATE_PAUSING.
+// 2. A subsequent retry of PauseActor re-attempts volume detachment and succeeds, transitioning the actor to ACTOR_STATE_PAUSED.
+//
+// Workflow:
+// 1. Creates a template with an external volume and creates a mock worker pod on node1.
+// 2. Creates and resumes an actor to ACTOR_STATE_RUNNING.
+// 3. Calls PauseActor; plugin is configured to fail DetachVolume on attempt 1.
+// 4. Verifies PauseActor returns an error and actor state is left in ACTOR_STATE_PAUSING.
+// 5. Calls PauseActor a second time (retry); detachment succeeds.
+// 6. Verifies actor state transitions to ACTOR_STATE_PAUSED.
+// 7. Cleans up by deleting the actor with AnyState=true.
+func TestPauseActor_VolumeDetachFailure_RetrySuccess(t *testing.T) {
+	ns := namespaceForTest("ns-pause-vol-detach-retry")
+	plugin := &detachFailVolumePlugin{failUntil: 1}
+	tc := setupTestWithVolumePlugins(t, ns, map[string]volume.VolumePluginControlPlane{
+		"substrate.io/mock": plugin,
+	})
+	defer tc.cleanup()
+
+	// 1. Create template with external volume and a mock worker pod.
+	volumes := []*ateapipb.Volume{
+		{
+			Name: "vol1",
+			ExternalVolumeTemplate: &ateapipb.ExternalVolumeTemplate{
+				StorageClassName: "standard",
+				Capacity:         "10Gi",
+			},
+		},
+	}
+	mounts := []*ateapipb.VolumeMount{
+		{Name: "vol1", MountPath: "/mnt/vol1"},
+	}
+	createTemplateWithVolumes(t, tc, ns, volumes, mounts)
+	createWorkerPod(t, tc, ns, "worker-1", "node1", "pool1")
+
+	// 2. Create and resume actor to ACTOR_STATE_RUNNING.
+	_, err := tc.client.CreateActor(context.Background(), &ateapipb.CreateActorRequest{
+		Actor: &ateapipb.Actor{
+			Metadata:      &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: "pause-detach-retry-actor"},
+			ActorTemplate: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "tmpl1"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("CreateActor failed: %v", err)
+	}
+
+	if _, err := tc.client.ResumeActor(context.Background(), &ateapipb.ResumeActorRequest{
+		Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "pause-detach-retry-actor"},
+	}); err != nil {
+		t.Fatalf("ResumeActor failed: %v", err)
+	}
+
+	// 3. Attempt 1: PauseActor fails on DetachVolume.
+	_, err = tc.client.PauseActor(context.Background(), &ateapipb.PauseActorRequest{
+		Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "pause-detach-retry-actor"},
+	})
+	if err == nil {
+		t.Fatalf("expected first PauseActor to fail, got nil")
+	}
+	if !strings.Contains(err.Error(), "simulated volume detach failure on attempt 1") {
+		t.Errorf("expected error containing simulated detach failure, got: %v", err)
+	}
+
+	// 4. Verify actor state is ACTOR_STATE_PAUSING.
+	getResp, err := tc.client.GetActor(context.Background(), &ateapipb.GetActorRequest{
+		Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "pause-detach-retry-actor"},
+	})
+	if err != nil {
+		t.Fatalf("GetActor after failed pause: %v", err)
+	}
+	if getResp.GetStatus().GetState() != ateapipb.ActorState_ACTOR_STATE_PAUSING {
+		t.Errorf("actor state = %v, want ACTOR_STATE_PAUSING", getResp.GetStatus().GetState())
+	}
+
+	// 5. Attempt 2 (retry): PauseActor retry succeeds, detaching volume.
+	_, err = tc.client.PauseActor(context.Background(), &ateapipb.PauseActorRequest{
+		Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "pause-detach-retry-actor"},
+	})
+	if err != nil {
+		t.Fatalf("expected retry PauseActor to succeed, got: %v", err)
+	}
+
+	// 6. Verify actor state transitions to ACTOR_STATE_PAUSED.
+	getResp, err = tc.client.GetActor(context.Background(), &ateapipb.GetActorRequest{
+		Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "pause-detach-retry-actor"},
+	})
+	if err != nil {
+		t.Fatalf("GetActor after successful pause retry: %v", err)
+	}
+	if getResp.GetStatus().GetState() != ateapipb.ActorState_ACTOR_STATE_PAUSED {
+		t.Errorf("actor state = %v, want ACTOR_STATE_PAUSED", getResp.GetStatus().GetState())
+	}
+
+	// 7. Clean up by deleting the actor with AnyState=true.
+	_, err = tc.client.DeleteActor(context.Background(), &ateapipb.DeleteActorRequest{
+		Actor:    &ateapipb.ObjectRef{Atespace: testAtespace, Name: "pause-detach-retry-actor"},
+		AnyState: true,
+	})
+	if err != nil {
+		t.Fatalf("DeleteActor failed: %v", err)
 	}
 }
 
