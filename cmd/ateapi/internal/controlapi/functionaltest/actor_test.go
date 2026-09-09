@@ -25,6 +25,7 @@ import (
 
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
 	"github.com/agent-substrate/substrate/internal/ateattr"
+	"github.com/agent-substrate/substrate/internal/ateerrors"
 	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/internal/volume"
@@ -1749,6 +1750,238 @@ func TestResumeActor_VolumeCreationRetrySuccess(t *testing.T) {
 	}
 }
 
+type attachFailVolumePlugin struct {
+	volume.VolumePluginControlPlane
+	mu             sync.Mutex
+	attachAttempts int
+	failUntil      int
+	attachedNodes  []string
+	detachedNodes  []string
+	deleted        []string
+}
+
+func (a *attachFailVolumePlugin) CreateVolume(ctx context.Context, name, capacity, driverName string, parameters map[string]string) (string, map[string]string, error) {
+	return "storage-" + name, parameters, nil
+}
+
+func (a *attachFailVolumePlugin) AttachVolume(ctx context.Context, volumeID, node string) error {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.attachAttempts++
+	if a.attachAttempts <= a.failUntil {
+		return fmt.Errorf("simulated volume attach failure on attempt %d", a.attachAttempts)
+	}
+	a.attachedNodes = append(a.attachedNodes, node)
+	return nil
+}
+
+func (a *attachFailVolumePlugin) DetachVolume(ctx context.Context, volumeID, node string) error {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.detachedNodes = append(a.detachedNodes, node)
+	return nil
+}
+
+func (a *attachFailVolumePlugin) DeleteVolume(ctx context.Context, volumeID string) error {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.deleted = append(a.deleted, volumeID)
+	return nil
+}
+
+// TestResumeActor_VolumeAttachFailureAndRetry tests that when volume attachment to a worker node
+// fails during ResumeActor, the actor is left in ACTOR_STATE_RESUMING with its worker assignment
+// and provisioned volumes intact, and that a subsequent call to ResumeActor re-attempts volume attachment
+// and successfully transitions the actor to ACTOR_STATE_RUNNING.
+func TestResumeActor_VolumeAttachFailureAndRetry(t *testing.T) {
+	ns := namespaceForTest("ns-resume-vol-attach-retry")
+	plugin := &attachFailVolumePlugin{failUntil: 1}
+	tc := setupTestWithVolumePlugins(t, ns, map[string]volume.VolumePluginControlPlane{
+		"substrate.io/mock": plugin,
+	})
+	defer tc.cleanup()
+
+	volumes := []*ateapipb.Volume{
+		{
+			Name: "vol1",
+			ExternalVolumeTemplate: &ateapipb.ExternalVolumeTemplate{
+				StorageClassName: "standard",
+				Capacity:         "10Gi",
+			},
+		},
+	}
+	mounts := []*ateapipb.VolumeMount{
+		{Name: "vol1", MountPath: "/mnt/vol1"},
+	}
+	createTemplateWithVolumes(t, tc, ns, volumes, mounts)
+	createWorkerPod(t, tc, ns, "worker-1", "node1", "pool1")
+
+	// Call CreateActor RPC directly
+	_, err := tc.client.CreateActor(context.Background(), &ateapipb.CreateActorRequest{
+		Actor: &ateapipb.Actor{
+			Metadata:      &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: "attach-retry-actor"},
+			ActorTemplate: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "tmpl1"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("expected CreateActor to succeed, got: %v", err)
+	}
+
+	// First call to ResumeActor: provisioning succeeds, worker is assigned, but AttachVolume fails (attempt 1)
+	_, err = tc.client.ResumeActor(context.Background(), &ateapipb.ResumeActorRequest{
+		Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "attach-retry-actor"},
+	})
+	if err == nil {
+		t.Fatalf("expected first ResumeActor to fail due to attach failure, but it succeeded")
+	}
+	if !strings.Contains(err.Error(), "simulated volume attach failure on attempt 1") {
+		t.Errorf("expected error containing simulated volume attach failure, got: %v", err)
+	}
+
+	// Verify actor status after failed attach: in ACTOR_STATE_RESUMING, worker assigned, volume CREATED
+	getResp, err := tc.client.GetActor(context.Background(), &ateapipb.GetActorRequest{
+		Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "attach-retry-actor"},
+	})
+	if err != nil {
+		t.Fatalf("GetActor after failed attach: %v", err)
+	}
+	if getResp.GetStatus().GetState() != ateapipb.ActorState_ACTOR_STATE_RESUMING {
+		t.Errorf("actor state after failed attach = %v, want ACTOR_STATE_RESUMING", getResp.GetStatus().GetState())
+	}
+	if getResp.GetStatus().GetWorkerAssignment() == nil || getResp.GetStatus().GetWorkerAssignment().GetWorkerPod() != "worker-1" {
+		t.Errorf("worker assignment = %v, want worker-1", getResp.GetStatus().GetWorkerAssignment())
+	}
+	if len(getResp.GetStatus().GetActorVolumes()) != 1 {
+		t.Fatalf("expected 1 volume on actor, got %d", len(getResp.GetStatus().GetActorVolumes()))
+	}
+	vol := getResp.GetStatus().GetActorVolumes()[0]
+	if vol.GetStatus() != ateapipb.ExternalVolume_STATUS_CREATED || vol.GetStorageVolumeId() == "" {
+		t.Errorf("vol1 unexpected state after failed attach: %v", vol)
+	}
+
+	// Second call to ResumeActor: reuses assigned worker, re-attempts volume attach, succeeds (attempt 2), transitions to RUNNING
+	_, err = tc.client.ResumeActor(context.Background(), &ateapipb.ResumeActorRequest{
+		Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "attach-retry-actor"},
+	})
+	if err != nil {
+		t.Fatalf("expected second ResumeActor to succeed, got: %v", err)
+	}
+
+	getResp, err = tc.client.GetActor(context.Background(), &ateapipb.GetActorRequest{
+		Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "attach-retry-actor"},
+	})
+	if err != nil {
+		t.Fatalf("GetActor after successful retry: %v", err)
+	}
+	if getResp.GetStatus().GetState() != ateapipb.ActorState_ACTOR_STATE_RUNNING {
+		t.Errorf("actor state after retry = %v, want ACTOR_STATE_RUNNING", getResp.GetStatus().GetState())
+	}
+
+	// Clean up by suspending and deleting the actor
+	_, err = tc.client.SuspendActor(context.Background(), &ateapipb.SuspendActorRequest{
+		Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "attach-retry-actor"},
+	})
+	if err != nil {
+		t.Fatalf("SuspendActor failed: %v", err)
+	}
+	_, err = tc.client.DeleteActor(context.Background(), &ateapipb.DeleteActorRequest{
+		Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "attach-retry-actor"},
+	})
+	if err != nil {
+		t.Fatalf("DeleteActor failed: %v", err)
+	}
+}
+
+// TestResumeActor_VolumeAttachFailure_DeleteActor tests that when volume attachment fails during ResumeActor,
+// calling DeleteActor without any_state is rejected because the actor is in ACTOR_STATE_RESUMING,
+// but calling DeleteActor with any_state=true succeeds, cleaning up worker assignment and volumes.
+func TestResumeActor_VolumeAttachFailure_DeleteActor(t *testing.T) {
+	ns := namespaceForTest("ns-resume-vol-attach-del")
+	plugin := &attachFailVolumePlugin{failUntil: 100}
+	tc := setupTestWithVolumePlugins(t, ns, map[string]volume.VolumePluginControlPlane{
+		"substrate.io/mock": plugin,
+	})
+	defer tc.cleanup()
+
+	volumes := []*ateapipb.Volume{
+		{
+			Name: "vol1",
+			ExternalVolumeTemplate: &ateapipb.ExternalVolumeTemplate{
+				StorageClassName: "standard",
+				Capacity:         "10Gi",
+			},
+		},
+	}
+	mounts := []*ateapipb.VolumeMount{
+		{Name: "vol1", MountPath: "/mnt/vol1"},
+	}
+	createTemplateWithVolumes(t, tc, ns, volumes, mounts)
+	createWorkerPod(t, tc, ns, "worker-1", "node1", "pool1")
+
+	// Call CreateActor RPC
+	_, err := tc.client.CreateActor(context.Background(), &ateapipb.CreateActorRequest{
+		Actor: &ateapipb.Actor{
+			Metadata:      &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: "attach-fail-actor"},
+			ActorTemplate: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "tmpl1"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("expected CreateActor to succeed, got: %v", err)
+	}
+
+	// Call ResumeActor RPC, which assigns worker-1 and fails on AttachVolume
+	_, err = tc.client.ResumeActor(context.Background(), &ateapipb.ResumeActorRequest{
+		Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "attach-fail-actor"},
+	})
+	if err == nil {
+		t.Fatalf("expected ResumeActor to fail due to attach failure, but it succeeded")
+	}
+
+	// Verify actor is in ACTOR_STATE_RESUMING
+	getResp, err := tc.client.GetActor(context.Background(), &ateapipb.GetActorRequest{
+		Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "attach-fail-actor"},
+	})
+	if err != nil {
+		t.Fatalf("GetActor failed: %v", err)
+	}
+	if getResp.GetStatus().GetState() != ateapipb.ActorState_ACTOR_STATE_RESUMING {
+		t.Fatalf("actor state = %v, want ACTOR_STATE_RESUMING", getResp.GetStatus().GetState())
+	}
+	actorUID := getResp.GetMetadata().GetUid()
+
+	// Calling DeleteActor without any_state should fail because RESUMING is not a deletable state
+	_, err = tc.client.DeleteActor(context.Background(), &ateapipb.DeleteActorRequest{
+		Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "attach-fail-actor"},
+	})
+	assertGrpcErrorRegex(t, err, codes.FailedPrecondition, "is not in a deletable state")
+
+	// Calling DeleteActor with any_state=true should succeed and cleanly tear down
+	_, err = tc.client.DeleteActor(context.Background(), &ateapipb.DeleteActorRequest{
+		Actor:    &ateapipb.ObjectRef{Atespace: testAtespace, Name: "attach-fail-actor"},
+		AnyState: true,
+	})
+	if err != nil {
+		t.Fatalf("DeleteActor with AnyState failed: %v", err)
+	}
+
+	// Verify volume was detached and deleted
+	expectedVolumeID := "storage-substrate-" + actorUID + "-vol1"
+	if diff := cmp.Diff([]string{"node1"}, plugin.detachedNodes); diff != "" {
+		t.Errorf("detached nodes mismatch (-want +got):\n%s", diff)
+	}
+	if diff := cmp.Diff([]string{expectedVolumeID}, plugin.deleted); diff != "" {
+		t.Errorf("deleted volume IDs mismatch (-want +got):\n%s", diff)
+	}
+
+	// Confirm GetActor returns NotFound after deletion
+	_, err = tc.client.GetActor(context.Background(), &ateapipb.GetActorRequest{
+		Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "attach-fail-actor"},
+	})
+	if status.Code(err) != codes.NotFound {
+		t.Errorf("GetActor after DeleteActor err = %v, want NotFound", err)
+	}
+}
+
 // TestResumeActor tests the full workflow of resuming a suspended actor.
 // Workflow:
 // 1. Creates a mock ActorTemplate.
@@ -2559,6 +2792,99 @@ func TestPauseActor(t *testing.T) {
 	if getResp.GetStatus().GetLocalSnapshotInfo().GetSnapshotName() == "" {
 		t.Error("LocalSnapshotInfo.SnapshotName is empty, want the name the pause checkpointed under")
 	}
+}
+
+// TestResumeActor_PausedLocalSnapshotMissing_Crashes tests that if the local checkpoint
+// files on the worker node are missing (e.g. node reboot, /tmp wipe) when resuming a PAUSED actor,
+// atelet returns a terminal file system error and ateapi marks the actor ACTOR_STATE_CRASHED
+// while releasing the assigned worker pod.
+func TestResumeActor_PausedLocalSnapshotMissing_Crashes(t *testing.T) {
+	ns := namespaceForTest("ns-resume-paused-missing")
+	tc := setupTest(t, ns)
+	defer tc.cleanup()
+
+	createTemplate(t, tc, ns)
+	createWorkerPod(t, tc, ns, "worker-1", "node1", "pool1")
+
+	name := "paused-missing-actor"
+	_, err := tc.client.CreateActor(context.Background(), &ateapipb.CreateActorRequest{
+		Actor: &ateapipb.Actor{
+			Metadata:      &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: name},
+			ActorTemplate: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "tmpl1"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("CreateActor failed: %v", err)
+	}
+
+	if _, err := tc.client.ResumeActor(context.Background(), &ateapipb.ResumeActorRequest{
+		Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: name},
+	}); err != nil {
+		t.Fatalf("ResumeActor failed: %v", err)
+	}
+
+	if _, err := tc.client.PauseActor(context.Background(), &ateapipb.PauseActorRequest{
+		Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: name},
+	}); err != nil {
+		t.Fatalf("PauseActor failed: %v", err)
+	}
+
+	getResp, err := tc.client.GetActor(context.Background(), &ateapipb.GetActorRequest{
+		Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: name},
+	})
+	if err != nil {
+		t.Fatalf("GetActor failed: %v", err)
+	}
+	if getResp.GetStatus().GetState() != ateapipb.ActorState_ACTOR_STATE_PAUSED {
+		t.Fatalf("actor state = %v, want ACTOR_STATE_PAUSED", getResp.GetStatus().GetState())
+	}
+	if getResp.GetStatus().GetLocalSnapshotInfo() == nil {
+		t.Fatal("expected LocalSnapshotInfo to be present on paused actor")
+	}
+
+	// Simulate node-local files missing by configuring fakeAtelet.FailRestore
+	// with a terminal file system error and the ActorCrashRequested directive.
+	tc.fakeAtelet.Reset()
+	tc.fakeAtelet.FailRestore = ateerrors.NewGRPCError(
+		context.Background(),
+		codes.NotFound,
+		ateerrors.ReasonTerminalFileSystemError,
+		ateerrors.ActorCrashedMetadata(),
+		errors.New("local checkpoint files missing on node: directory not found"),
+	)
+
+	// Call ResumeActor; should fail with DataLoss because actor crashed
+	_, err = tc.client.ResumeActor(context.Background(), &ateapipb.ResumeActorRequest{
+		Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: name},
+	})
+	if err == nil {
+		t.Fatal("expected ResumeActor to fail due to missing local snapshot, but it succeeded")
+	}
+	if status.Code(err) != codes.DataLoss {
+		t.Errorf("ResumeActor err code = %v, want DataLoss", status.Code(err))
+	}
+
+	// Assert actor transitioned to ACTOR_STATE_CRASHED
+	getResp, err = tc.client.GetActor(context.Background(), &ateapipb.GetActorRequest{
+		Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: name},
+	})
+	if err != nil {
+		t.Fatalf("GetActor failed: %v", err)
+	}
+	if getResp.GetStatus().GetState() != ateapipb.ActorState_ACTOR_STATE_CRASHED {
+		t.Errorf("actor state after failed restore = %v, want ACTOR_STATE_CRASHED", getResp.GetStatus().GetState())
+	}
+
+	// Worker assignment must be released so the worker is not leaked
+	if getResp.GetStatus().GetWorkerAssignment() != nil && getResp.GetStatus().GetWorkerAssignment().GetWorkerPod() != "" {
+		t.Errorf("worker assignment = %v, want worker released", getResp.GetStatus().GetWorkerAssignment())
+	}
+
+	// Subsequent ResumeActor call on CRASHED actor must be rejected
+	_, err = tc.client.ResumeActor(context.Background(), &ateapipb.ResumeActorRequest{
+		Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: name},
+	})
+	assertGrpcErrorRegex(t, err, codes.FailedPrecondition, "ACTOR_STATE_CRASHED")
 }
 
 // Pause stamps the ref identity before resolving the Actor record, so a failed
