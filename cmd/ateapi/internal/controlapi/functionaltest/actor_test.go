@@ -2551,7 +2551,7 @@ func TestPauseActor_VolumeLifecycle_DetachAndResumeAttach(t *testing.T) {
 		{Name: "vol1", MountPath: "/mnt/vol1"},
 	}
 	createTemplateWithVolumes(t, tc, ns, volumes, mounts)
-	createWorkerPod(t, tc, ns, "worker-1", "node1", "pool1")
+	workerName := createWorkerPod(t, tc, ns, "worker-1", "node1", "pool1")
 
 	// 2. Create actor and resume to RUNNING; volume is attached to node1.
 	_, err := tc.client.CreateActor(context.Background(), &ateapipb.CreateActorRequest{
@@ -2598,6 +2598,7 @@ func TestPauseActor_VolumeLifecycle_DetachAndResumeAttach(t *testing.T) {
 		t.Errorf("detached nodes after pause mismatch (-want +got):\n%s", diff)
 	}
 	plugin.mu.Unlock()
+	waitForWorkerAvailable(t, tc, workerName)
 
 	// 4. ResumeActor from PAUSED: volume is re-attached to node1 and actor transitions to ACTOR_STATE_RUNNING.
 	_, err = tc.client.ResumeActor(context.Background(), &ateapipb.ResumeActorRequest{
@@ -3565,7 +3566,7 @@ func TestResumeActor_PausedLocalSnapshotMissing_Crashes(t *testing.T) {
 	defer tc.cleanup()
 
 	createTemplate(t, tc, ns)
-	createWorkerPod(t, tc, ns, "worker-1", "node1", "pool1")
+	workerName := createWorkerPod(t, tc, ns, "worker-1", "node1", "pool1")
 
 	name := "paused-missing-actor"
 	_, err := tc.client.CreateActor(context.Background(), &ateapipb.CreateActorRequest{
@@ -3602,6 +3603,7 @@ func TestResumeActor_PausedLocalSnapshotMissing_Crashes(t *testing.T) {
 	if getResp.GetStatus().GetLocalSnapshotInfo() == nil {
 		t.Fatal("expected LocalSnapshotInfo to be present on paused actor")
 	}
+	waitForWorkerAvailable(t, tc, workerName)
 
 	// Simulate node-local files missing by configuring fakeAtelet.FailRestore
 	// with a terminal file system error and the ActorCrashRequested directive.
