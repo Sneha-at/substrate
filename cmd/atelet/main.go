@@ -440,6 +440,7 @@ type AteomHerder struct {
 	volumePlugins         map[string]volume.VolumePluginWorkerPlane
 	csiDriverConfigLister listersv1alpha1.CSIDriverConfigLister
 	systemInfoVolumes     *systemInfoVolumeRefresher
+	volumeHostPathFn         func(actorUID, volumeName string) string
 }
 
 var _ ateletpb.AteomHerderServer = (*AteomHerder)(nil)
@@ -465,6 +466,7 @@ func NewService(
 		volumePlugins:         volumePlugins,
 		csiDriverConfigLister: csiDriverConfigLister,
 		systemInfoVolumes:     systemInfoVolumes,
+		volumeHostPathFn:         ateompath.VolumeHostPath,
 	}
 	return wms
 }

@@ -189,16 +189,14 @@ func TestMountExternalVolumes(t *testing.T) {
 
 	t.Run("success mounts external volumes and creates mount directory", func(t *testing.T) {
 		tempDir := t.TempDir()
-		origVolumeHostPath := volumeHostPath
-		volumeHostPath = func(uid, name string) string {
-			return filepath.Join(tempDir, uid, name)
-		}
-		t.Cleanup(func() { volumeHostPath = origVolumeHostPath })
 
 		fake := &fakeWorkerPlugin{}
 		s := &AteomHerder{
 			volumePlugins: map[string]volume.VolumePluginWorkerPlane{
 				"mock-driver": fake,
+			},
+			volumeHostPathFn: func(uid, name string) string {
+				return filepath.Join(tempDir, uid, name)
 			},
 		}
 
@@ -238,11 +236,6 @@ func TestMountExternalVolumes(t *testing.T) {
 
 	t.Run("target directory already exists is handled cleanly", func(t *testing.T) {
 		tempDir := t.TempDir()
-		origVolumeHostPath := volumeHostPath
-		volumeHostPath = func(uid, name string) string {
-			return filepath.Join(tempDir, uid, name)
-		}
-		t.Cleanup(func() { volumeHostPath = origVolumeHostPath })
 
 		expectedPath := filepath.Join(tempDir, actorUID, "vol-1")
 		if err := os.MkdirAll(expectedPath, 0o750); err != nil {
@@ -253,6 +246,9 @@ func TestMountExternalVolumes(t *testing.T) {
 		s := &AteomHerder{
 			volumePlugins: map[string]volume.VolumePluginWorkerPlane{
 				"mock-driver": fake,
+			},
+			volumeHostPathFn: func(uid, name string) string {
+				return filepath.Join(tempDir, uid, name)
 			},
 		}
 
@@ -267,11 +263,6 @@ func TestMountExternalVolumes(t *testing.T) {
 
 	t.Run("plugin lookup failure returns error", func(t *testing.T) {
 		tempDir := t.TempDir()
-		origVolumeHostPath := volumeHostPath
-		volumeHostPath = func(uid, name string) string {
-			return filepath.Join(tempDir, uid, name)
-		}
-		t.Cleanup(func() { volumeHostPath = origVolumeHostPath })
 
 		unknownVol := &ateletpb.Volume{
 			Name: "vol-unknown",
@@ -285,6 +276,9 @@ func TestMountExternalVolumes(t *testing.T) {
 
 		s := &AteomHerder{
 			volumePlugins: map[string]volume.VolumePluginWorkerPlane{},
+			volumeHostPathFn: func(uid, name string) string {
+				return filepath.Join(tempDir, uid, name)
+			},
 		}
 
 		err := s.mountExternalVolumes(ctx, actorUID, []*ateletpb.Volume{unknownVol})
@@ -298,11 +292,6 @@ func TestMountExternalVolumes(t *testing.T) {
 
 	t.Run("plugin mount failure returns error", func(t *testing.T) {
 		tempDir := t.TempDir()
-		origVolumeHostPath := volumeHostPath
-		volumeHostPath = func(uid, name string) string {
-			return filepath.Join(tempDir, uid, name)
-		}
-		t.Cleanup(func() { volumeHostPath = origVolumeHostPath })
 
 		fake := &fakeWorkerPlugin{
 			mountErr: errors.New("mount operation failed: device or resource busy"),
@@ -310,6 +299,9 @@ func TestMountExternalVolumes(t *testing.T) {
 		s := &AteomHerder{
 			volumePlugins: map[string]volume.VolumePluginWorkerPlane{
 				"mock-driver": fake,
+			},
+			volumeHostPathFn: func(uid, name string) string {
+				return filepath.Join(tempDir, uid, name)
 			},
 		}
 
@@ -324,11 +316,6 @@ func TestMountExternalVolumes(t *testing.T) {
 
 	t.Run("multi-volume partial failure aborts on first failure", func(t *testing.T) {
 		tempDir := t.TempDir()
-		origVolumeHostPath := volumeHostPath
-		volumeHostPath = func(uid, name string) string {
-			return filepath.Join(tempDir, uid, name)
-		}
-		t.Cleanup(func() { volumeHostPath = origVolumeHostPath })
 
 		fake := &fakeWorkerPlugin{
 			mountErr: errors.New("cannot mount volume"),
@@ -336,6 +323,9 @@ func TestMountExternalVolumes(t *testing.T) {
 		s := &AteomHerder{
 			volumePlugins: map[string]volume.VolumePluginWorkerPlane{
 				"mock-driver": fake,
+			},
+			volumeHostPathFn: func(uid, name string) string {
+				return filepath.Join(tempDir, uid, name)
 			},
 		}
 
@@ -350,11 +340,6 @@ func TestMountExternalVolumes(t *testing.T) {
 
 	t.Run("multi-volume partial failure does not roll back already mounted volume", func(t *testing.T) {
 		tempDir := t.TempDir()
-		origVolumeHostPath := volumeHostPath
-		volumeHostPath = func(uid, name string) string {
-			return filepath.Join(tempDir, uid, name)
-		}
-		t.Cleanup(func() { volumeHostPath = origVolumeHostPath })
 
 		expectedPath1 := filepath.Join(tempDir, actorUID, "vol-1")
 		expectedPath2 := filepath.Join(tempDir, actorUID, "vol-2")
@@ -367,6 +352,9 @@ func TestMountExternalVolumes(t *testing.T) {
 		s := &AteomHerder{
 			volumePlugins: map[string]volume.VolumePluginWorkerPlane{
 				"mock-driver": fake,
+			},
+			volumeHostPathFn: func(uid, name string) string {
+				return filepath.Join(tempDir, uid, name)
 			},
 		}
 
@@ -428,16 +416,14 @@ func TestVolumeHostDirectoryCleanup(t *testing.T) {
 
 	t.Run("unmountExternalVolumes preserves host mount directories", func(t *testing.T) {
 		tempDir := t.TempDir()
-		origVolumeHostPath := volumeHostPath
-		volumeHostPath = func(uid, name string) string {
-			return filepath.Join(tempDir, uid, name)
-		}
-		t.Cleanup(func() { volumeHostPath = origVolumeHostPath })
 
 		fake := &fakeWorkerPlugin{}
 		s := &AteomHerder{
 			volumePlugins: map[string]volume.VolumePluginWorkerPlane{
 				"mock-driver": fake,
+			},
+			volumeHostPathFn: func(uid, name string) string {
+				return filepath.Join(tempDir, uid, name)
 			},
 		}
 
@@ -445,8 +431,8 @@ func TestVolumeHostDirectoryCleanup(t *testing.T) {
 			t.Fatalf("mountExternalVolumes failed: %v", err)
 		}
 
-		path1 := volumeHostPath(actorUID, "vol-1")
-		path2 := volumeHostPath(actorUID, "vol-2")
+		path1 := s.volumeHostPath(actorUID, "vol-1")
+		path2 := s.volumeHostPath(actorUID, "vol-2")
 		for _, p := range []string{path1, path2} {
 			if _, err := os.Stat(p); err != nil {
 				t.Fatalf("expected mount path %q to exist before unmount: %v", p, err)
