@@ -391,7 +391,7 @@ func TestEnsureExternalSnapshotsReleased_DeletePrefixFailure(t *testing.T) {
 		return errTransient
 	}
 
-	err := w.ensureExternalSnapshotsReleased(ctx, actor, template)
+	err := w.ensureExternalSnapshotsReleased(ctx, actor)
 	if !errors.Is(err, errTransient) {
 		t.Fatalf("ensureExternalSnapshotsReleased error = %v, want error wrapping %v", err, errTransient)
 	}
@@ -403,7 +403,7 @@ func TestEnsureExternalSnapshotsReleased_DeletePrefixFailure(t *testing.T) {
 
 	// Retry without failure: should successfully clean up the snapshot objects
 	objects.OnDelete = nil
-	if err := w.ensureExternalSnapshotsReleased(ctx, actor, template); err != nil {
+	if err := w.ensureExternalSnapshotsReleased(ctx, actor); err != nil {
 		t.Fatalf("ensureExternalSnapshotsReleased on retry failed: %v", err)
 	}
 	if remaining := objects.Snapshot(t, current); len(remaining) != 0 {

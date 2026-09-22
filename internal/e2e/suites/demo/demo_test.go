@@ -554,6 +554,8 @@ func TestExternalVolume_NodeMigration(t *testing.T) {
 		t.Logf("Evicting initial worker pod %s/%s to force migration...", initialWorkerNS, initialWorkerPod)
 		_ = clients.K8s.CoreV1().Pods(initialWorkerNS).Delete(ctx, initialWorkerPod, metav1.DeleteOptions{})
 	}
+	//	Wait for pod to be marked for deletion before resuming the actor to avoid race conditions
+	time.Sleep(5 * time.Second)
 
 	t.Logf("Resuming Actor %q after worker pod eviction...", actorName)
 	if _, err := e2e.ResumeActorAwaitCapacity(t, ctx, clients, &ateapipb.ResumeActorRequest{
