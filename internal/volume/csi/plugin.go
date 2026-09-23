@@ -80,32 +80,55 @@ func (p *Plugin) DriverName(ctx context.Context) (string, error) {
 }
 
 // CreateVolume maps to CSI Controller CreateVolume.
-func (p *Plugin) CreateVolume(ctx context.Context, name string, capacity string, driverName string, parameters map[string]string) (string, map[string]string, error) {
-	qty, err := resource.ParseQuantity(capacity)
+func (p *Plugin) CreateVolume(ctx context.Context, req volume.CreateVolumeRequest) (volume.CreateVolumeResponse, error) {
+	qty, err := resource.ParseQuantity(req.Capacity)
 	if err != nil {
-		return "", nil, fmt.Errorf("failed to parse capacity %q: %w", capacity, err)
+		return volume.CreateVolumeResponse{}, fmt.Errorf("failed to parse capacity %q: %w", req.Capacity, err)
 	}
 	capBytes := qty.Value()
 
-	req := &csi.CreateVolumeRequest{
-		Name: name,
+	csiReq := &csi.CreateVolumeRequest{
+		Name: req.Name,
 		CapacityRange: &csi.CapacityRange{
 			RequiredBytes: capBytes,
 		},
 		VolumeCapabilities: getStandardCapabilities(),
-		Parameters:         parameters,
+		Parameters:         req.Parameters,
+	}
+	if req.SourceSnapshotID != "" {
+		csiReq.VolumeContentSource = &csi.VolumeContentSource{
+			Type: &csi.VolumeContentSource_Snapshot{
+				Snapshot: &csi.VolumeContentSource_SnapshotSource{
+					SnapshotId: req.SourceSnapshotID,
+				},
+			},
+		}
 	}
 
-	resp, err := p.client.CreateVolume(ctx, req)
+	resp, err := p.client.CreateVolume(ctx, csiReq)
 	if err != nil {
-		return "", nil, fmt.Errorf("CSI CreateVolume failed: %w", err)
+		return volume.CreateVolumeResponse{}, fmt.Errorf("CSI CreateVolume failed: %w", err)
 	}
 
 	if resp.GetVolume() == nil {
-		return "", nil, fmt.Errorf("CSI CreateVolume response returned nil volume")
+		return volume.CreateVolumeResponse{}, fmt.Errorf("CSI CreateVolume response returned nil volume")
 	}
 
-	return resp.GetVolume().GetVolumeId(), resp.GetVolume().GetVolumeContext(), nil
+	restoredFrom := resp.GetVolume().GetContentSource().GetSnapshot().GetSnapshotId()
+	// A driver is required to report the content source it restored from. One
+	// that drops the request and reports success hands back an empty volume,
+	// which for a restore is silent data loss: the volume is mounted under
+	// process memory that expects its contents. Fail instead, and leave the
+	// volume to be cleaned up with the rest of the actor's.
+	if req.SourceSnapshotID != "" && restoredFrom != req.SourceSnapshotID {
+		return volume.CreateVolumeResponse{}, fmt.Errorf("CSI CreateVolume did not restore from the requested snapshot: requested %q, driver reported %q", req.SourceSnapshotID, restoredFrom)
+	}
+
+	return volume.CreateVolumeResponse{
+		VolumeID:                resp.GetVolume().GetVolumeId(),
+		VolumeContext:           resp.GetVolume().GetVolumeContext(),
+		ContentSourceSnapshotID: restoredFrom,
+	}, nil
 }
 
 // DeleteVolume maps to CSI Controller DeleteVolume.
@@ -169,6 +192,93 @@ func (p *Plugin) DetachVolume(ctx context.Context, volumeID string, node string)
 		return fmt.Errorf("CSI ControllerUnpublishVolume failed: %w", err)
 	}
 	return nil
+}
+
+// CreateSnapshot maps to CSI Controller CreateSnapshot.
+func (p *Plugin) CreateSnapshot(ctx context.Context, req volume.CreateSnapshotRequest) (volume.Snapshot, error) {
+	resp, err := p.client.CreateSnapshot(ctx, &csi.CreateSnapshotRequest{
+		Name:           req.Name,
+		SourceVolumeId: req.SourceVolumeID,
+		Parameters:     req.Parameters,
+	})
+	if err != nil {
+		return volume.Snapshot{}, fmt.Errorf("CSI CreateSnapshot failed: %w", err)
+	}
+	if resp.GetSnapshot() == nil {
+		return volume.Snapshot{}, fmt.Errorf("CSI CreateSnapshot response returned nil snapshot")
+	}
+	return snapshotFromCSI(resp.GetSnapshot()), nil
+}
+
+// GetSnapshot maps to CSI Controller ListSnapshots filtered to one handle. The
+// CSI spec has no single-snapshot read, and a driver that does not implement
+// ListSnapshots at all cannot report readiness, so treat that as "not found"
+// rather than an error: the caller decides whether an unobservable snapshot is
+// acceptable.
+func (p *Plugin) GetSnapshot(ctx context.Context, snapshotID string) (volume.Snapshot, bool, error) {
+	resp, err := p.client.ListSnapshots(ctx, &csi.ListSnapshotsRequest{
+		SnapshotId: snapshotID,
+	})
+	if err != nil {
+		if status.Code(err) == codes.Unimplemented {
+			slog.WarnContext(ctx, "CSI ListSnapshots is unimplemented by driver; cannot observe snapshot readiness", slog.String("snapshot_id", snapshotID))
+			return volume.Snapshot{}, false, nil
+		}
+		return volume.Snapshot{}, false, fmt.Errorf("CSI ListSnapshots failed: %w", err)
+	}
+	// Filtering by snapshot_id yields at most one entry, and an empty list for
+	// a handle the driver no longer has.
+	for _, entry := range resp.GetEntries() {
+		if snap := entry.GetSnapshot(); snap.GetSnapshotId() == snapshotID {
+			return snapshotFromCSI(snap), true, nil
+		}
+	}
+	return volume.Snapshot{}, false, nil
+}
+
+// DeleteSnapshot maps to CSI Controller DeleteSnapshot.
+func (p *Plugin) DeleteSnapshot(ctx context.Context, snapshotID string) error {
+	// The CSI spec requires DeleteSnapshot to succeed for a snapshot that does
+	// not exist, but not every driver honors that, and cleanup must stay
+	// retryable either way.
+	_, err := p.client.DeleteSnapshot(ctx, &csi.DeleteSnapshotRequest{
+		SnapshotId: snapshotID,
+	})
+	if err != nil && status.Code(err) != codes.NotFound {
+		return fmt.Errorf("CSI DeleteSnapshot failed: %w", err)
+	}
+	return nil
+}
+
+// ControllerCapabilities maps to CSI ControllerGetCapabilities.
+func (p *Plugin) ControllerCapabilities(ctx context.Context) (volume.Capabilities, error) {
+	resp, err := p.client.ControllerGetCapabilities(ctx, &csi.ControllerGetCapabilitiesRequest{})
+	if err != nil {
+		return volume.Capabilities{}, fmt.Errorf("CSI ControllerGetCapabilities failed: %w", err)
+	}
+	var caps volume.Capabilities
+	for _, c := range resp.GetCapabilities() {
+		switch c.GetRpc().GetType() {
+		case csi.ControllerServiceCapability_RPC_CREATE_DELETE_SNAPSHOT:
+			caps.CreateDeleteSnapshot = true
+		case csi.ControllerServiceCapability_RPC_LIST_SNAPSHOTS:
+			caps.ListSnapshots = true
+		}
+	}
+	return caps, nil
+}
+
+func snapshotFromCSI(snap *csi.Snapshot) volume.Snapshot {
+	out := volume.Snapshot{
+		SnapshotID:     snap.GetSnapshotId(),
+		SourceVolumeID: snap.GetSourceVolumeId(),
+		ReadyToUse:     snap.GetReadyToUse(),
+		SizeBytes:      snap.GetSizeBytes(),
+	}
+	if ct := snap.GetCreationTime(); ct != nil {
+		out.CreationTime = ct.AsTime()
+	}
+	return out
 }
 
 // MountVolume maps to CSI Node NodePublishVolume.

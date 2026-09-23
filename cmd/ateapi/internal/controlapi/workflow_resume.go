@@ -153,6 +153,49 @@ func validateGoldenSnapshotScope(snapshot *ateapipb.ExternalSnapshot) error {
 	}
 }
 
+// validateTagVolumeCompatibility checks that a tag can seed a template's
+// external volumes.
+//
+// The template's declared volumes are what the Actor will be given, so every
+// one of them needs a snapshot on the tag. Without this an Actor would come up
+// with an empty disk mounted under memory restored from the tag, which is
+// silent data loss rather than a visible failure.
+//
+// resolveTagSource already requires the tag and template to share an
+// actor_template_uid, which makes the set comparison close to tautological
+// today. It is cheap, and it is what stops a repointed template from quietly
+// widening the volume set.
+func validateTagVolumeCompatibility(tag *ateapipb.Tag, template *ateapipb.ActorTemplate) error {
+	var externalVolumes []string
+	for _, vol := range template.GetVolumes() {
+		if vol.GetExternalVolumeTemplate() != nil {
+			externalVolumes = append(externalVolumes, vol.GetName())
+		}
+	}
+	if len(externalVolumes) == 0 {
+		return nil
+	}
+
+	snapshot := tag.GetStatus().GetSnapshot()
+	if snapshot.GetExternalVolumeScope() != ateapipb.ExternalVolumeSnapshotScope_EXTERNAL_VOLUME_SNAPSHOT_SCOPE_ALL {
+		return status.Errorf(codes.FailedPrecondition,
+			"ActorTemplate declares external volumes but Tag %s captured none; create the tag with an external volume scope of ALL",
+			resources.TagRefFromTag(tag))
+	}
+	captured := make(map[string]bool, len(snapshot.GetVolumeSnapshots()))
+	for _, snap := range snapshot.GetVolumeSnapshots() {
+		captured[snap.GetVolumeName()] = true
+	}
+	for _, name := range externalVolumes {
+		if !captured[name] {
+			return status.Errorf(codes.FailedPrecondition,
+				"Tag %s has no snapshot for external volume %q declared by the ActorTemplate",
+				resources.TagRefFromTag(tag), name)
+		}
+	}
+	return nil
+}
+
 // loadActorForResume fetches the current actor record and its template, and
 // resolves the boot source for the pending restore.
 func (w *ActorWorkflow) loadActorForResume(ctx context.Context, actorRef resources.ActorRef) (_ *ateapipb.Actor, _ *ateapipb.ActorTemplate, _ resumeSnapshotSource, err error) {
@@ -256,7 +299,7 @@ func (w *ActorWorkflow) ensureVolumesCreated(ctx context.Context, actorRef resou
 		return actor, nil
 	}
 
-	volumes, createErr := createActorVolumes(ctx, w.pluginRegistry, w.storageClassLister, actor.GetMetadata().GetUid(), actorTemplate, actor.GetStatus().GetActorVolumes())
+	volumes, createErr := createActorVolumes(ctx, w.pluginRegistry, w.storageClassLister, actor.GetMetadata().GetUid(), actorTemplate, actor.GetStatus().GetActorVolumes(), actor.GetStatus().GetExternalSnapshot().GetVolumeSnapshots())
 	// createActorVolumes reports the state it got to even when it fails, so both
 	// paths persist the same field.
 	updatePrecondition := store.PreconditionFrom(actor)

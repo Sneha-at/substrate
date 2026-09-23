@@ -49,7 +49,10 @@ type RPCService struct {
 	instruments           *Instruments
 	mu                    sync.RWMutex
 	volumePlugins         map[string]volume.VolumePluginControlPlane
-	objectStore           objectstore.Store
+	// volumeCapabilities caches each driver's controller capabilities, guarded
+	// by mu alongside volumePlugins.
+	volumeCapabilities map[string]volume.Capabilities
+	objectStore        objectstore.Store
 
 	actorIdentityJWTIssuer string
 	actorIDJWTPool         localjwtauthority.Pool
@@ -61,6 +64,10 @@ var _ ateapipb.ControlServer = (*RPCService)(nil)
 // VolumePluginRegistry defines the interface for dynamic CSI plugin resolution.
 type VolumePluginRegistry interface {
 	GetPlugin(ctx context.Context, name string) (volume.VolumePluginControlPlane, error)
+	// GetCapabilities reports what the named driver's controller supports.
+	// Capabilities belong to the driver rather than to any one volume, so the
+	// result is cached for the life of the plugin.
+	GetCapabilities(ctx context.Context, name string) (volume.Capabilities, error)
 }
 
 // NewRPCService creates an instance of the ControlServer service. This is what
@@ -96,6 +103,7 @@ func NewRPCService(
 		dialer:                 dialer,
 		instruments:            instruments,
 		volumePlugins:          volumePlugins,
+		volumeCapabilities:     make(map[string]volume.Capabilities),
 		objectStore:            objectStore,
 		actorIdentityJWTIssuer: actorIdentityJWTIssuer,
 		actorIDJWTPool:         actorIDJWTPool,
@@ -155,6 +163,31 @@ func (s *RPCService) GetPlugin(ctx context.Context, driverName string) (volume.V
 	s.volumePlugins[driverName] = csiPlugin
 	s.mu.Unlock()
 	return csiPlugin, nil
+}
+
+// GetCapabilities retrieves a driver's controller capabilities, querying the
+// driver the first time and serving the cached answer thereafter.
+func (s *RPCService) GetCapabilities(ctx context.Context, driverName string) (volume.Capabilities, error) {
+	s.mu.RLock()
+	caps, ok := s.volumeCapabilities[driverName]
+	s.mu.RUnlock()
+	if ok {
+		return caps, nil
+	}
+
+	plugin, err := s.GetPlugin(ctx, driverName)
+	if err != nil {
+		return volume.Capabilities{}, err
+	}
+	caps, err = plugin.ControllerCapabilities(ctx)
+	if err != nil {
+		return volume.Capabilities{}, err
+	}
+
+	s.mu.Lock()
+	s.volumeCapabilities[driverName] = caps
+	s.mu.Unlock()
+	return caps, nil
 }
 
 // ServiceImpl implements store.Interface and provides the "middleware" layer

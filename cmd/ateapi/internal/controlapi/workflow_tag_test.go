@@ -82,7 +82,7 @@ func TestTagActorSnapshot(t *testing.T) {
 	actor, actorSnapshot := seedTagSource(t, ctx, persistence, objects, template, "actor-1", "manifest.json", "memory.zst")
 	actorRef := resources.ActorRefFromActor(actor)
 
-	tag, err := w.TagActorSnapshot(ctx, tagToCreate(actorRef, "v1"))
+	tag, err := w.TagActorSnapshot(ctx, tagToCreate(actorRef, "v1"), ateapipb.ExternalVolumeSnapshotScope_EXTERNAL_VOLUME_SNAPSHOT_SCOPE_NONE)
 	if err != nil {
 		t.Fatalf("TagActorSnapshot: %v", err)
 	}
@@ -130,7 +130,7 @@ func TestTagActorSnapshot_ActorRepointedToAnotherTemplate(t *testing.T) {
 		t.Fatalf("repointing actor %s: %v", actorRef, err)
 	}
 
-	tag, err := w.TagActorSnapshot(ctx, tagToCreate(actorRef, "v1"))
+	tag, err := w.TagActorSnapshot(ctx, tagToCreate(actorRef, "v1"), ateapipb.ExternalVolumeSnapshotScope_EXTERNAL_VOLUME_SNAPSHOT_SCOPE_NONE)
 	if err != nil {
 		t.Fatalf("TagActorSnapshot: %v", err)
 	}
@@ -201,7 +201,7 @@ func TestTagActorSnapshot_Preconditions(t *testing.T) {
 				})
 			}
 
-			_, err := w.TagActorSnapshot(ctx, tagToCreate(actorRef, "v1"))
+			_, err := w.TagActorSnapshot(ctx, tagToCreate(actorRef, "v1"), ateapipb.ExternalVolumeSnapshotScope_EXTERNAL_VOLUME_SNAPSHOT_SCOPE_NONE)
 			if code := status.Code(err); code != tt.wantCode {
 				t.Fatalf("TagActorSnapshot error = %v (code %v), want code %v", err, code, tt.wantCode)
 			}
@@ -235,7 +235,7 @@ func TestTagActorSnapshot_RecreateAfterCopyFailure(t *testing.T) {
 		}
 		return nil
 	}
-	if _, err := w.TagActorSnapshot(ctx, tagToCreate(actorRef, "v1")); !errors.Is(err, errObjectStore) {
+	if _, err := w.TagActorSnapshot(ctx, tagToCreate(actorRef, "v1"), ateapipb.ExternalVolumeSnapshotScope_EXTERNAL_VOLUME_SNAPSHOT_SCOPE_NONE); !errors.Is(err, errObjectStore) {
 		t.Fatalf("TagActorSnapshot = %v, want an error wrapping %v", err, errObjectStore)
 	}
 	objects.OnCopy = nil
@@ -255,7 +255,7 @@ func TestTagActorSnapshot_RecreateAfterCopyFailure(t *testing.T) {
 
 	// Creating under the same name again is refused, even for the actor the
 	// pending row was reserved for, and leaves that row exactly as it was.
-	_, err = w.TagActorSnapshot(ctx, tagToCreate(actorRef, "v1"))
+	_, err = w.TagActorSnapshot(ctx, tagToCreate(actorRef, "v1"), ateapipb.ExternalVolumeSnapshotScope_EXTERNAL_VOLUME_SNAPSHOT_SCOPE_NONE)
 	if code := status.Code(err); code != codes.AlreadyExists {
 		t.Fatalf("TagActorSnapshot over the pending tag = %v (code %v), want code AlreadyExists", err, code)
 	}
@@ -279,7 +279,7 @@ func TestTagActorSnapshot_RecreateAfterCopyFailure(t *testing.T) {
 	}
 
 	// The create now runs from scratch, into a prefix of its own.
-	tag, err := w.TagActorSnapshot(ctx, tagToCreate(actorRef, "v1"))
+	tag, err := w.TagActorSnapshot(ctx, tagToCreate(actorRef, "v1"), ateapipb.ExternalVolumeSnapshotScope_EXTERNAL_VOLUME_SNAPSHOT_SCOPE_NONE)
 	if err != nil {
 		t.Fatalf("TagActorSnapshot after the delete: %v", err)
 	}
@@ -295,7 +295,7 @@ func TestTagActorSnapshot_RecreateAfterCopyFailure(t *testing.T) {
 	}
 
 	// A create over the finished tag is refused the same way.
-	_, err = w.TagActorSnapshot(ctx, tagToCreate(actorRef, "v1"))
+	_, err = w.TagActorSnapshot(ctx, tagToCreate(actorRef, "v1"), ateapipb.ExternalVolumeSnapshotScope_EXTERNAL_VOLUME_SNAPSHOT_SCOPE_NONE)
 	if code := status.Code(err); code != codes.AlreadyExists {
 		t.Errorf("TagActorSnapshot over the finished tag = %v (code %v), want code AlreadyExists", err, code)
 	}
@@ -331,7 +331,7 @@ func TestTagActorSnapshot_RacesDelete(t *testing.T) {
 		return nil
 	}
 
-	tag, createErr := w.TagActorSnapshot(ctx, tagToCreate(actorRef, "v1"))
+	tag, createErr := w.TagActorSnapshot(ctx, tagToCreate(actorRef, "v1"), ateapipb.ExternalVolumeSnapshotScope_EXTERNAL_VOLUME_SNAPSHOT_SCOPE_NONE)
 	if pendingURI == "" {
 		t.Fatalf("the create never reserved a row to race with (TagActorSnapshot = %v)", createErr)
 	}
@@ -378,8 +378,8 @@ func TestTagActorSnapshot_NameTakenByAnotherActor(t *testing.T) {
 		}
 		return nil
 	}
-	if _, err := w.TagActorSnapshot(ctx, tagToCreate(resources.ActorRefFromActor(first), "v1")); !errors.Is(err, errObjectStore) {
-		t.Fatalf("TagActorSnapshot(actor-1) = %v, want an error wrapping %v", err, errObjectStore)
+	if _, err := w.TagActorSnapshot(ctx, tagToCreate(resources.ActorRefFromActor(first), "v1"), ateapipb.ExternalVolumeSnapshotScope_EXTERNAL_VOLUME_SNAPSHOT_SCOPE_NONE); !errors.Is(err, errObjectStore) {
+		t.Fatalf("TagActorSnapshot(actor-1, ateapipb.ExternalVolumeSnapshotScope_EXTERNAL_VOLUME_SNAPSHOT_SCOPE_NONE) = %v, want an error wrapping %v", err, errObjectStore)
 	}
 	pending, err := persistence.GetTag(ctx, tagRef)
 	if err != nil {
@@ -390,9 +390,9 @@ func TestTagActorSnapshot_NameTakenByAnotherActor(t *testing.T) {
 	// The second actor asks for the same name, with object storage healthy: it
 	// must not inherit the first actor's prefix.
 	objects.OnCopy = nil
-	_, err = w.TagActorSnapshot(ctx, tagToCreate(resources.ActorRefFromActor(second), "v1"))
+	_, err = w.TagActorSnapshot(ctx, tagToCreate(resources.ActorRefFromActor(second), "v1"), ateapipb.ExternalVolumeSnapshotScope_EXTERNAL_VOLUME_SNAPSHOT_SCOPE_NONE)
 	if code := status.Code(err); code != codes.AlreadyExists {
-		t.Fatalf("TagActorSnapshot(actor-2) = %v (code %v), want code AlreadyExists", err, code)
+		t.Fatalf("TagActorSnapshot(actor-2, ateapipb.ExternalVolumeSnapshotScope_EXTERNAL_VOLUME_SNAPSHOT_SCOPE_NONE) = %v (code %v), want code AlreadyExists", err, code)
 	}
 	if diff := cmp.Diff([]string{"manifest.json"}, objects.Snapshot(t, strandedURI)); diff != "" {
 		t.Errorf("the rejected create wrote into the pending tag's prefix (-want +got):\n%s", diff)
@@ -419,7 +419,7 @@ func TestDeleteTag_ReleasesExternalSnapshot(t *testing.T) {
 	template := seedSubstrateTemplate(t, ctx, persistence, "sub-tmpl")
 	w, objects := newFinalizeWorkflow(persistence)
 	actor, _ := seedTagSource(t, ctx, persistence, objects, template, "actor-1", "manifest.json", "memory.zst")
-	tag, err := w.TagActorSnapshot(ctx, tagToCreate(resources.ActorRefFromActor(actor), "v1"))
+	tag, err := w.TagActorSnapshot(ctx, tagToCreate(resources.ActorRefFromActor(actor), "v1"), ateapipb.ExternalVolumeSnapshotScope_EXTERNAL_VOLUME_SNAPSHOT_SCOPE_NONE)
 	if err != nil {
 		t.Fatalf("TagActorSnapshot: %v", err)
 	}

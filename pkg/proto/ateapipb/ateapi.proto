@@ -161,6 +161,110 @@ message ExternalSnapshot {
   // +k8s:minimum=1
   // +k8s:maximum=2 # keep this in sync with the SnapshotContentScope enum
   SnapshotContentScope content_scope = 2;
+
+  // external_volume_scope records which of the source's external volumes this
+  // snapshot captured. Recorded before the first volume snapshot is taken, so
+  // that readers can tell "no volumes were asked for" from "volumes were asked
+  // for and the capture did not finish". A reader that wants volume data must
+  // check this rather than the emptiness of volume_snapshots below.
+  //
+  // +k8s:optional
+  // +k8s:minimum=1
+  // +k8s:maximum=2 # keep this in sync with the ExternalVolumeSnapshotScope enum
+  ExternalVolumeSnapshotScope external_volume_scope = 3;
+
+  // volume_snapshots holds one entry per external volume captured, and is set
+  // only when external_volume_scope is ALL. Actors seeded from a Tag provision
+  // their own volumes from these, so the entries are handles to copy from, not
+  // volumes to attach. Each template volume appears at most once.
+  //
+  // +k8s:optional
+  // +k8s:maxItems=32 # matches the template's volumes bound
+  // +k8s:listType=map
+  // +k8s:listMapKey=volume_name
+  repeated ExternalVolumeSnapshot volume_snapshots = 4;
+}
+
+// ExternalVolumeSnapshotScope is which of a source's external volumes an
+// ExternalSnapshot captured. External volumes are persistent and outlive any
+// single actor sprint, so they are captured only when a snapshot is persisted
+// past the latest state: at tag creation, opted into per request.
+enum ExternalVolumeSnapshotScope {
+  EXTERNAL_VOLUME_SNAPSHOT_SCOPE_UNSPECIFIED = 0;
+  // No external volume was captured. An Actor seeded from this snapshot gets
+  // empty volumes, so a template that declares any external volume cannot be
+  // seeded from it.
+  EXTERNAL_VOLUME_SNAPSHOT_SCOPE_NONE = 1;
+  // Every external volume the source declared was captured. Partial capture is
+  // not representable: tag creation is all-or-nothing, so a snapshot recording
+  // ALL has an entry for each of the source's external volumes.
+  EXTERNAL_VOLUME_SNAPSHOT_SCOPE_ALL = 2;
+  // Keep this in sync with the maximums on fields of this type.
+}
+
+// ExternalVolumeSnapshot is a point-in-time copy of one external volume, held
+// by the ExternalSnapshot that captured it. Volumes restored from it are new
+// volumes with their own IDs: the snapshot is never attached directly, so many
+// Actors can be seeded from one snapshot without sharing storage.
+message ExternalVolumeSnapshot {
+  // volume_name is the template volume this was captured from, matching the
+  // ExternalVolume of the same name on the source Actor. A restored volume
+  // keeps the name and takes a new storage_volume_id, which is what lets the
+  // attach and mount paths stay unaware of snapshots entirely.
+  //
+  // +k8s:required
+  // +k8s:format=k8s-short-name
+  // +k8s:update=NoModify
+  // +k8s:update=NoUnset # set-once; immutable would reject the create
+  // ratchet's nil->set when the final object is validated as an update
+  string volume_name = 1;
+
+  // storage_snapshot_id is the snapshot handle returned by the storage system.
+  // Its format is the storage system's own, so it is only bounded and checked
+  // for control characters, like ExternalVolume.storage_volume_id.
+  //
+  // +k8s:required
+  // +k8s:maxLength=256
+  // +k8s:update=NoModify
+  // +k8s:update=NoUnset
+  // +k8s:customValidation # no control characters
+  string storage_snapshot_id = 2;
+
+  // volume_type is the plugin or CSI driver that took the snapshot, copied
+  // from the source ExternalVolume. A restore must go through the same driver:
+  // a snapshot handle means nothing to any other one.
+  //
+  // +k8s:required
+  // +k8s:maxLength=253
+  // +k8s:update=NoModify
+  // +k8s:update=NoUnset
+  // +k8s:customValidation
+  string volume_type = 3;
+
+  // ready_to_use is whether the storage system had finished the snapshot when
+  // it was last observed. False is not a failure: drivers may return a usable
+  // handle while the copy proceeds in the background, and tag creation does not
+  // wait for it. Restore checks readiness again at that point, so this records
+  // what was seen rather than a durable property, and is per-volume so a
+  // lagging volume can be named.
+  //
+  // +k8s:optional
+  bool ready_to_use = 4;
+
+  // size_bytes is the snapshot's size as reported by the storage system, or 0
+  // if it did not report one. Carried because CreateSnapshot returns it, so
+  // recording it costs nothing and saves a later round trip.
+  //
+  // +k8s:optional
+  // +k8s:minimum=0
+  int64 size_bytes = 5;
+
+  // creation_time is when the storage system cut the snapshot. This is the
+  // point in time the volume data is from, which is not the same as when the
+  // Tag was created.
+  //
+  // +k8s:optional
+  google.protobuf.Timestamp creation_time = 6;
 }
 
 message LocalSnapshotInfo {
@@ -680,6 +784,20 @@ message TagStatus {
   // +k8s:required
   // +k8s:maxLength=1024
   string storage_location = 3;
+
+  // in_progress_volume_snapshots holds volume snapshots taken for this tag but
+  // not yet committed to snapshot above. Each handle is recorded here as the
+  // storage system returns it, so that a CreateTag that fails partway through
+  // -- or whose caller disappears -- still leaves every snapshot it created
+  // reachable for deletion. Cleared when the tag is finalized, at which point
+  // snapshot.volume_snapshots owns them. Each template volume appears at most
+  // once.
+  //
+  // +k8s:optional
+  // +k8s:maxItems=32 # matches the template's volumes bound
+  // +k8s:listType=map
+  // +k8s:listMapKey=volume_name
+  repeated ExternalVolumeSnapshot in_progress_volume_snapshots = 5;
 }
 
 // Tag is an Atespace-owned, stable name for one external snapshot. The
@@ -1669,6 +1787,19 @@ message CreateTagRequest {
   //
   // +k8s:required
   Tag tag = 1;
+
+  // external_volume_scope opts the tag into capturing the source Actor's
+  // external volumes. Unset reads as NONE, so volumes are captured only when
+  // asked for: snapshotting them costs storage and time that a tag of the core
+  // session alone does not.
+  //
+  // Requesting ALL requires every external volume's driver to support
+  // snapshots, and fails the call if any does not.
+  //
+  // +k8s:optional
+  // +k8s:minimum=1
+  // +k8s:maximum=2 # keep this in sync with the ExternalVolumeSnapshotScope enum
+  ExternalVolumeSnapshotScope external_volume_scope = 2;
 }
 
 // Request to update mutable fields on an existing Tag.

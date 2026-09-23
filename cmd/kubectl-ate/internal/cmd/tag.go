@@ -32,9 +32,12 @@ var (
 	createTagAtespaceFlag  string
 	createTagActorFlag     string
 	createTagScopeFlag     string
-	updateTagAtespaceFlag  string
-	updateTagScopeFlag     string
-	deleteTagAtespaceFlag  string
+	// createTagWithVolumesFlag opts the tag into capturing the actor's external
+	// volumes as well as its core session.
+	createTagWithVolumesFlag bool
+	updateTagAtespaceFlag    string
+	updateTagScopeFlag       string
+	deleteTagAtespaceFlag    string
 )
 
 var getTagsCmd = &cobra.Command{
@@ -113,12 +116,17 @@ var createTagCmd = &cobra.Command{
 		}
 		defer client.Close()
 
+		volumeScope := ateapipb.ExternalVolumeSnapshotScope_EXTERNAL_VOLUME_SNAPSHOT_SCOPE_NONE
+		if createTagWithVolumesFlag {
+			volumeScope = ateapipb.ExternalVolumeSnapshotScope_EXTERNAL_VOLUME_SNAPSHOT_SCOPE_ALL
+		}
 		tag, err := client.CreateTag(ctx, &ateapipb.CreateTagRequest{
 			Tag: &ateapipb.Tag{
 				Metadata:    &ateapipb.ResourceMetadata{Atespace: createTagAtespaceFlag, Name: args[0]},
 				Scope:       scope,
 				SourceActor: &ateapipb.ObjectRef{Atespace: createTagAtespaceFlag, Name: createTagActorFlag},
 			},
+			ExternalVolumeScope: volumeScope,
 		})
 		if err != nil {
 			return fmt.Errorf("failed to create tag: %w", err)
@@ -215,6 +223,7 @@ func init() {
 	createTagCmd.Flags().StringVar(&createTagActorFlag, "actor", "", "Name of the suspended actor whose external snapshot to tag (required)")
 	_ = createTagCmd.MarkFlagRequired("actor")
 	createTagCmd.Flags().StringVar(&createTagScopeFlag, "scope", "atespace", "Tag scope: atespace or published")
+	createTagCmd.Flags().BoolVar(&createTagWithVolumesFlag, "with-volumes", false, "Also snapshot the actor's external volumes, so actors created from this tag start from a copy of their data")
 	createCmd.AddCommand(createTagCmd)
 
 	updateTagCmd.Flags().StringVarP(&updateTagAtespaceFlag, "atespace", "a", "", "Atespace owning the tag (required)")

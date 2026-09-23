@@ -93,13 +93,6 @@ func (s *ServiceImpl) CreateActor(ctx context.Context, inActor *ateapipb.Actor) 
 	tagRef := inActor.GetSourceTag()
 	if tagRef == nil {
 		tagRef = template.GetStatus().GetGoldenSnapshotStatus().GetGoldenTag()
-	} else {
-		for _, volume := range template.GetVolumes() {
-			if volume.GetExternalVolumeTemplate() != nil {
-				// TODO: Permit cloning after CSI volume snapshots are supported.
-				return nil, status.Error(codes.FailedPrecondition, "Tag cloning does not support ActorTemplates with external volumes")
-			}
-		}
 	}
 	var sourceTag *ateapipb.Tag
 	if tagRef != nil {
@@ -108,9 +101,18 @@ func (s *ServiceImpl) CreateActor(ctx context.Context, inActor *ateapipb.Actor) 
 			return nil, err
 		}
 		if inActor.GetSourceTag() == nil {
+			// A golden tag is the template's own boot image, taken from a
+			// throwaway golden actor whose volumes hold nothing worth keeping,
+			// and it is created without capturing them. Requiring volume
+			// snapshots of it would make every template that declares an
+			// external volume unusable, so the golden path keeps its existing
+			// behavior of provisioning those volumes empty.
+			// TODO: revisit once golden snapshots can capture volumes.
 			if err := validateGoldenSnapshotScope(sourceTag.GetStatus().GetSnapshot()); err != nil {
 				return nil, err
 			}
+		} else if err := validateTagVolumeCompatibility(sourceTag, template); err != nil {
+			return nil, err
 		}
 	}
 

@@ -21,6 +21,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/agent-substrate/substrate/internal/volume"
 	"github.com/container-storage-interface/spec/lib/go/csi"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -184,13 +185,17 @@ func TestPlugin_CreateVolume(t *testing.T) {
 	plugin := NewPlugin(client)
 
 	ctx := context.Background()
-	volID, _, err := plugin.CreateVolume(ctx, "test-vol", "1Gi", "standard", nil)
+	resp, err := plugin.CreateVolume(ctx, volume.CreateVolumeRequest{
+		Name:       "test-vol",
+		Capacity:   "1Gi",
+		DriverName: "standard",
+	})
 	if err != nil {
 		t.Fatalf("CreateVolume failed: %v", err)
 	}
 
-	if volID != "test-vol" {
-		t.Errorf("expected volume ID %q, got %q", "test-vol", volID)
+	if resp.VolumeID != "test-vol" {
+		t.Errorf("expected volume ID %q, got %q", "test-vol", resp.VolumeID)
 	}
 }
 

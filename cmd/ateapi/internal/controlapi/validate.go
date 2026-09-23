@@ -110,6 +110,17 @@ func ValidateCustom_WorkerAssignment_WorkerPodIp(_ context.Context, _ operation.
 // ValidateCustom_ExternalVolume_VolumeType checks that a volume type string is well-formed.
 // It allows an optional "substrate.io/" prefix, followed by a valid DNS-1123 subdomain.
 func ValidateCustom_ExternalVolume_VolumeType(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *string) field.ErrorList {
+	return validateVolumeType(fldPath, value)
+}
+
+// ValidateCustom_ExternalVolumeSnapshot_VolumeType checks the driver that took a
+// volume snapshot, which is copied from the source volume and so takes the same
+// form as ExternalVolume.volume_type.
+func ValidateCustom_ExternalVolumeSnapshot_VolumeType(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *string) field.ErrorList {
+	return validateVolumeType(fldPath, value)
+}
+
+func validateVolumeType(fldPath *field.Path, value *string) field.ErrorList {
 	if value == nil || *value == "" {
 		return nil
 	}
@@ -124,6 +135,19 @@ func ValidateCustom_ExternalVolume_VolumeType(_ context.Context, _ operation.Ope
 // ValidateCustom_ExternalVolume_StorageVolumeId checks that an external volume's storage ID does not
 // contain control characters (U+0000-U+0008, U+000B, U+000C, U+000E-U+001F, U+007F-U+009F).
 func ValidateCustom_ExternalVolume_StorageVolumeId(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *string) field.ErrorList {
+	return validateStorageSystemID(fldPath, value)
+}
+
+// ValidateCustom_ExternalVolumeSnapshot_StorageSnapshotId checks a volume
+// snapshot handle. Like a volume ID, the handle's format belongs to the storage
+// system, so the only thing worth checking is that it is printable.
+func ValidateCustom_ExternalVolumeSnapshot_StorageSnapshotId(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *string) field.ErrorList {
+	return validateStorageSystemID(fldPath, value)
+}
+
+// validateStorageSystemID rejects control characters in an opaque identifier
+// handed to us by a storage system.
+func validateStorageSystemID(fldPath *field.Path, value *string) field.ErrorList {
 	if value == nil || *value == "" {
 		return nil
 	}

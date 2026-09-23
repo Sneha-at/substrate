@@ -264,7 +264,7 @@ func TestCreateActorVolumes(t *testing.T) {
 					},
 				},
 			}
-			res, err := createActorVolumes(ctx, registry, scLister, "actor-uid-123", tt.tmpl, tt.inputVolumes)
+			res, err := createActorVolumes(ctx, registry, scLister, "actor-uid-123", tt.tmpl, tt.inputVolumes, nil)
 			if (err != nil) != tt.wantErr {
 				t.Errorf("createActorVolumes() error = %v, wantErr %v", err, tt.wantErr)
 			}
@@ -345,4 +345,12 @@ func (m *mockPluginRegistry) GetPlugin(ctx context.Context, name string) (volume
 		return nil, fmt.Errorf("plugin %q not found in mock registry", name)
 	}
 	return p, nil
+}
+
+func (m *mockPluginRegistry) GetCapabilities(ctx context.Context, name string) (volume.Capabilities, error) {
+	p, err := m.GetPlugin(ctx, name)
+	if err != nil {
+		return volume.Capabilities{}, err
+	}
+	return p.ControllerCapabilities(ctx)
 }
