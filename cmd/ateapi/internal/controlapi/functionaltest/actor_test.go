@@ -25,7 +25,6 @@ import (
 
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
 	"github.com/agent-substrate/substrate/internal/ateattr"
-	"github.com/agent-substrate/substrate/internal/ateerrors"
 	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/internal/volume"
@@ -3600,26 +3599,20 @@ func TestResumeActor_PausedLocalSnapshotMissing_Crashes(t *testing.T) {
 	}
 	waitForWorkerAvailable(t, tc, workerName)
 
-	// Simulate node-local files missing by configuring fakeAtelet.FailRestore
-	// with a terminal file system error and the ActorCrashRequested directive.
+	// Simulate node-local files missing: atelet reports the restore as NotFound.
 	tc.fakeAtelet.Reset()
-	tc.fakeAtelet.FailRestore = ateerrors.NewGRPCError(
-		context.Background(),
-		codes.NotFound,
-		ateerrors.ReasonTerminalFileSystemError,
-		ateerrors.ActorCrashedMetadata(),
-		errors.New("local checkpoint files missing on node: directory not found"),
-	)
+	tc.fakeAtelet.FailRestore = status.Error(codes.NotFound, "local checkpoint files missing on node: directory not found")
 
-	// Call ResumeActor; should fail with DataLoss because actor crashed
+	// A failed restore crashes the actor, and the caller sees atelet's own
+	// status rather than a synthetic crash status.
 	_, err = tc.client.ResumeActor(context.Background(), &ateapipb.ResumeActorRequest{
 		Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: name},
 	})
 	if err == nil {
 		t.Fatal("expected ResumeActor to fail due to missing local snapshot, but it succeeded")
 	}
-	if status.Code(err) != codes.DataLoss {
-		t.Errorf("ResumeActor err code = %v, want DataLoss", status.Code(err))
+	if got := status.Code(err); got != codes.NotFound {
+		t.Errorf("ResumeActor err code = %v, want %v", got, codes.NotFound)
 	}
 
 	// Assert actor transitioned to ACTOR_STATE_CRASHED
