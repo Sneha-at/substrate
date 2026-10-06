@@ -150,6 +150,40 @@ func validateGoldenSnapshotScope(snapshot *ateapipb.ExternalSnapshot) error {
 	}
 }
 
+// validateTagVolumeCompatibility checks that the volume snapshots a tag
+// recorded can seed a template's external volumes.
+//
+// A tag captures all, some, or none of the source Actor's external volumes, as
+// its creator asked. A template volume the tag has no snapshot for is
+// provisioned empty; a missing snapshot looks the same as one left out on
+// purpose, so this cannot tell a forgotten volume from an excluded one.
+//
+// What it does reject is a recorded volume without a handle, whose snapshot
+// creation did not finish: restoring it would hand out an empty disk the tag
+// claims to hold data for. A finalized tag never has one, since a failed
+// capture fails the whole create, so this guards against a broken row.
+func validateTagVolumeCompatibility(tag *ateapipb.Tag, template *ateapipb.ActorTemplate) error {
+	externalVolumes := map[string]bool{}
+	for _, vol := range template.GetVolumes() {
+		if vol.GetExternalVolumeTemplate() != nil {
+			externalVolumes[vol.GetName()] = true
+		}
+	}
+
+	tagRef := resources.TagRefFromTag(tag)
+	for _, snap := range tag.GetStatus().GetSnapshot().GetVolumeSnapshots() {
+		if !externalVolumes[snap.GetSourceVolumeName()] {
+			continue
+		}
+		if snap.GetStorageSnapshotId() == "" {
+			return apierror.FailedPrecondition(
+				"Tag %s has no snapshot handle for external volume %q: its snapshot creation did not finish",
+				tagRef, snap.GetSourceVolumeName())
+		}
+	}
+	return nil
+}
+
 // loadActorForResume fetches the current actor record and its template, and
 // resolves the boot source for the pending restore.
 func (w *ActorWorkflow) loadActorForResume(ctx context.Context, actorRef resources.ActorRef) (_ *ateapipb.Actor, _ *ateapipb.ActorTemplate, _ resumeSnapshotSource, err error) {
@@ -207,7 +241,7 @@ func (w *ActorWorkflow) ensureVolumesCreated(ctx context.Context, actorRef resou
 		return actor, nil
 	}
 
-	volumes, createErr := createActorVolumes(ctx, w.pluginRegistry, w.storageClassLister, actor.GetMetadata().GetUid(), actorTemplate, actor.GetStatus().GetActorVolumes())
+	volumes, createErr := createActorVolumes(ctx, w.pluginRegistry, w.storageClassLister, actor.GetMetadata().GetUid(), actorTemplate, actor.GetStatus().GetActorVolumes(), actor.GetStatus().GetExternalSnapshot().GetVolumeSnapshots())
 	// createActorVolumes reports the state it got to even when it fails, so both
 	// paths persist the same field.
 	updatePrecondition := store.PreconditionFrom(actor)

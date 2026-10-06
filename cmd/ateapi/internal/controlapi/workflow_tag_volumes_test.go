@@ -728,3 +728,138 @@ func TestTagActorSnapshot_HandleWriteFailureIsRecoveredOnDelete(t *testing.T) {
 		t.Errorf("snapshots created but not deleted (-created +deleted):\n%s", diff)
 	}
 }
+
+// TestValidateTagVolumeCompatibility covers the check that stops an Actor from
+// being seeded from a tag that cannot fill its volumes.
+func TestValidateTagVolumeCompatibility(t *testing.T) {
+	externalVolumeTemplate := func(names ...string) *ateapipb.ActorTemplate {
+		tmpl := &ateapipb.ActorTemplate{}
+		for _, name := range names {
+			tmpl.Volumes = append(tmpl.Volumes, &ateapipb.Volume{
+				Name:                   name,
+				ExternalVolumeTemplate: &ateapipb.ExternalVolumeTemplate{StorageClassName: "standard"},
+			})
+		}
+		return tmpl
+	}
+	// tagWith builds a tag whose volume snapshots are named by the keys of
+	// handles, each with the handle it maps to ("" for one that did not finish).
+	tagWith := func(handles map[string]string) *ateapipb.Tag {
+		snapshot := &ateapipb.ExternalSnapshot{SnapshotUri: "gs://bucket/tag"}
+		for name, id := range handles {
+			snapshot.VolumeSnapshots = append(snapshot.VolumeSnapshots, &ateapipb.ExternalVolumeSnapshot{SourceVolumeName: name, StorageSnapshotId: id})
+		}
+		return &ateapipb.Tag{
+			Metadata: &ateapipb.ResourceMetadata{Atespace: "team-a", Name: "v1"},
+			Status:   &ateapipb.TagStatus{Snapshot: snapshot},
+		}
+	}
+
+	tests := []struct {
+		name     string
+		tag      *ateapipb.Tag
+		template *ateapipb.ActorTemplate
+		wantCode codes.Code
+	}{
+		{
+			name:     "template declares no external volumes",
+			tag:      tagWith(nil),
+			template: &ateapipb.ActorTemplate{Volumes: []*ateapipb.Volume{{Name: "scratch"}}},
+			wantCode: codes.OK,
+		},
+		{
+			name:     "every volume captured",
+			tag:      tagWith(map[string]string{"data": "snap-data", "cache": "snap-cache"}),
+			template: externalVolumeTemplate("data", "cache"),
+			wantCode: codes.OK,
+		},
+		{
+			// Volumes the tag did not capture are provisioned empty.
+			name:     "tag captured no volumes",
+			tag:      tagWith(nil),
+			template: externalVolumeTemplate("data"),
+			wantCode: codes.OK,
+		},
+		{
+			name:     "volume snapshot did not finish",
+			tag:      tagWith(map[string]string{"data": "snap-data", "cache": ""}),
+			template: externalVolumeTemplate("data", "cache"),
+			wantCode: codes.FailedPrecondition,
+		},
+		{
+			name:     "tag captured a subset of volumes",
+			tag:      tagWith(map[string]string{"data": "snap-data"}),
+			template: externalVolumeTemplate("data", "cache"),
+			wantCode: codes.OK,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validateTagVolumeCompatibility(tt.tag, tt.template)
+			if got := apierror.Code(err); got != tt.wantCode {
+				t.Errorf("validateTagVolumeCompatibility() = %v (code %v), want code %v", err, got, tt.wantCode)
+			}
+		})
+	}
+}
+
+// TestResolveVolumeSource covers picking the snapshot a restored volume is
+// seeded from, and the readiness check deferred here from tag creation.
+func TestResolveVolumeSource(t *testing.T) {
+	snapshots := []*ateapipb.ExternalVolumeSnapshot{
+		{SourceVolumeName: "data", StorageSnapshotId: "snap-data", VolumeType: testVolumeDriver, ReadyToUse: true},
+	}
+
+	t.Run("volume with no snapshot is provisioned empty", func(t *testing.T) {
+		got, err := resolveVolumeSource(context.Background(), newFakeSnapshotPlugin(), snapshots, "cache", testVolumeDriver)
+		if err != nil {
+			t.Fatalf("resolveVolumeSource: %v", err)
+		}
+		if got != "" {
+			t.Errorf("source snapshot = %q, want empty", got)
+		}
+	})
+
+	t.Run("volume with a snapshot is restored from it", func(t *testing.T) {
+		got, err := resolveVolumeSource(context.Background(), newFakeSnapshotPlugin(), snapshots, "data", testVolumeDriver)
+		if err != nil {
+			t.Fatalf("resolveVolumeSource: %v", err)
+		}
+		if want := "snap-data"; got != want {
+			t.Errorf("source snapshot = %q, want %q", got, want)
+		}
+	})
+
+	t.Run("volume whose snapshot did not finish is rejected", func(t *testing.T) {
+		unfinished := []*ateapipb.ExternalVolumeSnapshot{{SourceVolumeName: "data", VolumeType: testVolumeDriver}}
+		_, err := resolveVolumeSource(context.Background(), newFakeSnapshotPlugin(), unfinished, "data", testVolumeDriver)
+		if apierror.Code(err) != codes.FailedPrecondition {
+			t.Errorf("resolveVolumeSource() = %v, want FailedPrecondition", err)
+		}
+	})
+
+	t.Run("snapshot from another driver is rejected", func(t *testing.T) {
+		_, err := resolveVolumeSource(context.Background(), newFakeSnapshotPlugin(), snapshots, "data", "substrate.io/other")
+		if apierror.Code(err) != codes.FailedPrecondition {
+			t.Errorf("resolveVolumeSource() = %v, want FailedPrecondition", err)
+		}
+	})
+
+	t.Run("snapshot still copying is rejected", func(t *testing.T) {
+		plugin := newFakeSnapshotPlugin()
+		plugin.readyToUse = false
+		_, err := resolveVolumeSource(context.Background(), plugin, snapshots, "data", testVolumeDriver)
+		if apierror.Code(err) != codes.FailedPrecondition {
+			t.Errorf("resolveVolumeSource() = %v, want FailedPrecondition", err)
+		}
+	})
+
+	t.Run("snapshot deleted behind our back is rejected", func(t *testing.T) {
+		plugin := newFakeSnapshotPlugin()
+		plugin.missingSnapshots = map[string]bool{"snap-data": true}
+		_, err := resolveVolumeSource(context.Background(), plugin, snapshots, "data", testVolumeDriver)
+		if apierror.Code(err) != codes.FailedPrecondition {
+			t.Errorf("resolveVolumeSource() = %v, want FailedPrecondition", err)
+		}
+	})
+}
