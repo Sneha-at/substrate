@@ -103,6 +103,9 @@ func TestTagActorSnapshot(t *testing.T) {
 	if got, want := tag.GetStatus().GetSnapshot().GetContentScope(), ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL; got != want {
 		t.Errorf("content scope = %v, want the source's %v", got, want)
 	}
+	if got, want := tag.GetStatus().GetState(), ateapipb.TagState_TAG_STATE_READY; got != want {
+		t.Errorf("tag state = %v, want %v", got, want)
+	}
 
 	// Both prefixes hold the same objects: the tag copied rather than moved.
 	wantObjects := []string{"manifest.json", "memory.zst"}
@@ -218,8 +221,8 @@ func TestTagActorSnapshot_Preconditions(t *testing.T) {
 }
 
 // TestTagActorSnapshot_RecreateAfterCopyFailure verifies what a create that
-// dies mid-copy leaves behind, and how a client gets past it. The row survives
-// as a pending tag naming the prefix the copy was writing into, so the objects
+// fails mid-copy leaves behind, and how a client gets past it. The row survives
+// as a failed tag naming the prefix the copy was writing into, so the objects
 // it stranded are reachable; the name it holds is taken until the tag is
 // deleted, and only then does a create under that name run again.
 func TestTagActorSnapshot_RecreateAfterCopyFailure(t *testing.T) {
@@ -250,6 +253,9 @@ func TestTagActorSnapshot_RecreateAfterCopyFailure(t *testing.T) {
 	}
 	if got := pending.GetStatus().GetSnapshot().GetSnapshotUri(); got != "" {
 		t.Errorf("snapshot uri after the failure = %q, want unset: the copy never finished", got)
+	}
+	if got, want := pending.GetStatus().GetState(), ateapipb.TagState_TAG_STATE_FAILED; got != want {
+		t.Errorf("tag state after the failure = %v, want %v", got, want)
 	}
 	strandedURI := mustReservedTagSnapshotURI(t, pending)
 	stranded := strandedURI.String()
@@ -436,8 +442,12 @@ func TestDeleteTag_ReleasesExternalSnapshot(t *testing.T) {
 	if _, err := w.DeleteTag(ctx, tagRef, store.DeletePreconditions{}); !errors.Is(err, errObjectStore) {
 		t.Fatalf("DeleteTag = %v, want an error wrapping %v", err, errObjectStore)
 	}
-	if _, err := persistence.GetTag(ctx, tagRef); err != nil {
+	deleting, err := persistence.GetTag(ctx, tagRef)
+	if err != nil {
 		t.Fatalf("GetTag after the failure: %v", err)
+	}
+	if got, want := deleting.GetStatus().GetState(), ateapipb.TagState_TAG_STATE_DELETING; got != want {
+		t.Errorf("tag state after the failed delete = %v, want %v", got, want)
 	}
 
 	// Simulates a retried deletion. Now, the object deletion succeeds,

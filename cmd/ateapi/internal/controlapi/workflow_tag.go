@@ -18,6 +18,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
+	"time"
 
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
 	"github.com/agent-substrate/substrate/internal/apierror"
@@ -32,19 +34,22 @@ import (
 // or deleting the actor does not garbage collect the tag's snapshot.
 //
 // The tag is built in 3 phases:
-//  1. Reserve the tag and record its storage location.
+//  1. Reserve the tag in TAG_STATE_CREATING and record its storage location.
 //  2. Copy the snapshot under the reserved tag's UID.
-//  3. Finalize: write the completed snapshot object to the tag.
+//  3. Finalize: write the completed snapshot object to the tag and move it to
+//     TAG_STATE_READY.
 //
 // The tag captures whichever snapshot the actor holds when the workflow runs.
 // An actor keeps no snapshot history, so a suspend that lands first moves what
 // gets tagged; that race is inherent to naming an actor rather than a snapshot.
 //
-// Not idempotent: the name is taken as soon as phase 1 lands, so a create that
-// dies after it leaves a pending tag and every later create under that name is
-// AlreadyExists. To retry, delete the tag, which collects whatever the failed
-// attempt stranded, and create it again.
-func (w *ActorWorkflow) TagActorSnapshot(ctx context.Context, tag *ateapipb.Tag) (*ateapipb.Tag, error) {
+// Not idempotent: the name is taken as soon as phase 1 lands. If a later phase
+// fails, the tag is moved to TAG_STATE_FAILED and kept, along with whatever the
+// failed phases left behind. A create whose process dies leaves the tag in
+// TAG_STATE_CREATING. Either way every later create under that name is
+// AlreadyExists; to retry, delete the tag, which collects what it stranded,
+// and create it again.
+func (w *ActorWorkflow) TagActorSnapshot(ctx context.Context, tag *ateapipb.Tag) (_ *ateapipb.Tag, err error) {
 	actorRef := resources.ActorRefFromObjectRef(tag.GetSourceActor())
 
 	// Serializes against a suspend of the same actor, which would otherwise
@@ -74,6 +79,14 @@ func (w *ActorWorkflow) TagActorSnapshot(ctx context.Context, tag *ateapipb.Tag)
 	if err != nil {
 		return nil, err
 	}
+	// From here on the row exists, so a failure marks it failed. The deferred
+	// call runs before the leases are released.
+	defer func() {
+		if err != nil {
+			w.markTagFailed(leaseCtx, reserved)
+		}
+	}()
+
 	dst, err := resources.NewTagSnapshotURI(reserved.GetStatus().GetStorageLocation(), tagRef.Atespace, reserved.GetMetadata().GetUid())
 	if err != nil {
 		return nil, fmt.Errorf("while building the snapshot URI for tag %s: %w", tagRef, err)
@@ -88,10 +101,14 @@ func (w *ActorWorkflow) TagActorSnapshot(ctx context.Context, tag *ateapipb.Tag)
 // row, in that order: the row is the only handle on that snapshot, so dropping
 // it first would leak.
 //
-// The workflow is built in 3 phases:
+// The workflow is built in 4 phases:
 //  1. Load the tag (which names the snapshot to collect).
-//  2. Release that snapshot, tolerating a previous attempt partly collected.
-//  3. Finalize: drop the row.
+//  2. Move it to TAG_STATE_DELETING, so readers see it is going away.
+//  3. Release that snapshot, tolerating a previous attempt partly collected.
+//  4. Finalize: drop the row.
+//
+// It cleans up a tag in any state, including one a failed or crashed create
+// left in TAG_STATE_FAILED or TAG_STATE_CREATING.
 //
 // Idempotent: a failure at any phase leaves the row in place, so the same
 // delete run again rediscovers the work from it and resumes over whatever is
@@ -125,10 +142,39 @@ func (w *ActorWorkflow) DeleteTag(ctx context.Context, tagRef resources.TagRef, 
 		}
 		return nil, apierror.Aborted("concurrent update conflict, please retry")
 	}
+	tag, err = w.ensureTagDeleting(ctx, tag)
+	if err != nil {
+		return nil, err
+	}
 	if err := w.ensureTagSnapshotReleased(ctx, tag); err != nil {
 		return nil, err
 	}
-	return w.finalizeTagDeleted(ctx, tagRef, precondition)
+	// The caller's precondition was checked against the row before it was
+	// marked; marking it moved its version on.
+	return w.finalizeTagDeleted(ctx, tagRef, store.DeletePreconditions{UID: tag.GetMetadata().GetUid(), Version: tag.GetMetadata().GetVersion()})
+}
+
+// ensureTagDeleting moves the tag to TAG_STATE_DELETING, which is terminal.
+func (w *ActorWorkflow) ensureTagDeleting(ctx context.Context, tag *ateapipb.Tag) (_ *ateapipb.Tag, err error) {
+	ctx, done := stepSpan(ctx, "MarkTagDeleting")
+	defer func() { err = done(err) }()
+
+	if tag.GetStatus().GetState() == ateapipb.TagState_TAG_STATE_DELETING {
+		markSkipped(ctx, "tag is already being deleted")
+		return tag, nil
+	}
+	tagRef := resources.TagRefFromTag(tag)
+	updated, err := w.store.UpdateTag(ctx, tagRef, store.PreconditionFrom(tag), func(toUpdate *ateapipb.Tag) error {
+		toUpdate.Status.State = ateapipb.TagState_TAG_STATE_DELETING
+		return nil
+	})
+	if err != nil {
+		if errors.Is(err, store.ErrVersionConflict) || errors.Is(err, store.ErrUIDConflict) || errors.Is(err, store.ErrNotFound) {
+			return nil, apierror.Aborted("concurrent update conflict, please retry")
+		}
+		return nil, fmt.Errorf("while marking tag %s deleting: %w", tagRef, err)
+	}
+	return updated, nil
 }
 
 // loadTagForDelete fetches the row the delete works from. The row records where
@@ -191,6 +237,44 @@ func (w *ActorWorkflow) finalizeTagDeleted(ctx context.Context, tagRef resources
 	return tag, nil
 }
 
+// markTagFailedTimeout bounds the write that marks a failed create's tag after
+// the caller's context may be gone.
+const markTagFailedTimeout = 30 * time.Second
+
+// markTagFailed moves a tag whose create failed to TAG_STATE_FAILED. It is
+// best effort: the create is already failing, so an error here is logged and
+// the tag is left in TAG_STATE_CREATING, which DeleteTag cleans up the same
+// way.
+//
+// It keeps ctx's values but not its cancellation, so a create that failed
+// because its RPC was canceled still records the failure. The row is read
+// again rather than taken from the caller, since earlier phases moved its
+// version on; a row that is gone or carries another UID is left alone.
+func (w *ActorWorkflow) markTagFailed(ctx context.Context, reserved *ateapipb.Tag) {
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), markTagFailedTimeout)
+	defer cancel()
+	ctx, done := stepSpan(ctx, "MarkTagFailed")
+
+	tagRef := resources.TagRefFromTag(reserved)
+	err := func() error {
+		tag, err := w.store.GetTag(ctx, tagRef)
+		if err != nil {
+			return fmt.Errorf("while getting tag %s: %w", tagRef, err)
+		}
+		if tag.GetMetadata().GetUid() != reserved.GetMetadata().GetUid() {
+			return nil
+		}
+		_, err = w.store.UpdateTag(ctx, tagRef, store.PreconditionFrom(tag), func(toUpdate *ateapipb.Tag) error {
+			toUpdate.Status.State = ateapipb.TagState_TAG_STATE_FAILED
+			return nil
+		})
+		return err
+	}()
+	if err = done(err); err != nil {
+		slog.ErrorContext(ctx, "failed to mark a failed tag create; the tag is left creating", slog.String("tag", tagRef.String()), slog.Any("error", err))
+	}
+}
+
 // loadActorForTag fetches the actor to tag and its template, and checks that
 // the actor holds an external snapshot a tag can be made from.
 func (w *ActorWorkflow) loadActorForTag(ctx context.Context, actorRef resources.ActorRef) (_ *ateapipb.Actor, _ *ateapipb.ActorTemplate, err error) {
@@ -225,13 +309,15 @@ func (w *ActorWorkflow) loadActorForTag(ctx context.Context, actorRef resources.
 	return actor, actorTemplate, nil
 }
 
-// ensureTagReserved takes the tag's name and records the storage location.
+// ensureTagReserved takes the tag's name in TAG_STATE_CREATING and records the
+// storage location.
 //
-// A name already taken is AlreadyExists, whether the tag holding it is finished
-// or was left pending by a create that died. Resuming a pending row would mean
-// deciding whether the objects under it still belong to the snapshot being
-// tagged, and the row may not even be this actor's; deleting the tag collects
-// them and frees the name, so a retry is a delete followed by a create.
+// A name already taken is AlreadyExists, whatever state the tag holding it is
+// in, including one a failed or crashed create left behind. Resuming such a
+// row would mean deciding whether the objects under it still belong to the
+// snapshot being tagged, and the row may not even be this actor's; deleting
+// the tag collects them and frees the name, so a retry is a delete followed by
+// a create.
 func (w *ActorWorkflow) ensureTagReserved(ctx context.Context, tagRef resources.TagRef, actor *ateapipb.Actor, actorTemplate *ateapipb.ActorTemplate, tag *ateapipb.Tag) (_ *ateapipb.Tag, err error) {
 	ctx, done := stepSpan(ctx, "ReserveTag")
 	defer func() { err = done(err) }()
@@ -252,6 +338,7 @@ func (w *ActorWorkflow) ensureTagReserved(ctx context.Context, tagRef resources.
 			// the actor itself would take.
 			ActorTemplateUid: actor.GetStatus().GetExternalSnapshot().GetActorTemplateUid(),
 			StorageLocation:  location,
+			State:            ateapipb.TagState_TAG_STATE_CREATING,
 		},
 	}
 
@@ -289,8 +376,9 @@ func (w *ActorWorkflow) ensureTagSnapshotCopied(ctx context.Context, tag *ateapi
 	return nil
 }
 
-// ensureTagFinalized publishes the copy by setting status.snapshot. Until this
-// lands the tag is pending and unusable; deleting it collects any partial copy.
+// ensureTagFinalized publishes the copy by setting status.snapshot and moves
+// the tag from TAG_STATE_CREATING to TAG_STATE_READY. Until this lands the tag
+// is unusable; deleting it collects any partial copy.
 func (w *ActorWorkflow) ensureTagFinalized(ctx context.Context, tag *ateapipb.Tag, snapshot *ateapipb.ExternalSnapshot, dst resources.SnapshotURI) (_ *ateapipb.Tag, err error) {
 	ctx, done := stepSpan(ctx, "FinalizeTag")
 	defer func() { err = done(err) }()
@@ -303,6 +391,7 @@ func (w *ActorWorkflow) ensureTagFinalized(ctx context.Context, tag *ateapipb.Ta
 	}
 	stored, err := w.store.UpdateTag(ctx, tagRef, store.PreconditionFrom(tag), func(toUpdate *ateapipb.Tag) error {
 		toUpdate.Status.Snapshot = finalSnapshot
+		toUpdate.Status.State = ateapipb.TagState_TAG_STATE_READY
 		return nil
 	})
 	if err != nil {
