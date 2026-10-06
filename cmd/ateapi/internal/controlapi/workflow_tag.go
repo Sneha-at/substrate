@@ -758,3 +758,86 @@ func finalizedTagState(volumeSnapshots []*ateapipb.ExternalVolumeSnapshot) ateap
 	}
 	return ateapipb.TagState_TAG_STATE_READY
 }
+
+// RefreshTagState asks the storage system whether the volume snapshots of a
+// TAG_STATE_CAPTURED tag have become ready to use, records the ones that have,
+// and moves the tag to TAG_STATE_READY once all of them are. A tag in any other
+// state is returned as is, without asking the storage system anything.
+//
+// CreateTag does not wait for a snapshot to finish, so this is how a caller
+// waiting on GetTag sees a captured tag become ready. It is best effort, since
+// GetTag is a read: a snapshot the driver cannot report on, a driver error, or
+// a concurrent write leaves the tag as stored, and the next call tries again.
+func (w *ActorWorkflow) RefreshTagState(ctx context.Context, tag *ateapipb.Tag) *ateapipb.Tag {
+	if tag.GetStatus().GetState() != ateapipb.TagState_TAG_STATE_CAPTURED {
+		return tag
+	}
+	tagRef := resources.TagRefFromTag(tag)
+	snapshots := tag.GetStatus().GetSnapshot().GetVolumeSnapshots()
+	nowReady := make([]bool, len(snapshots))
+	var wg sync.WaitGroup
+	for i, snap := range snapshots {
+		if snap.GetReadyToUse() || snap.GetStorageSnapshotId() == "" {
+			continue
+		}
+		wg.Go(func() {
+			ready, err := w.volumeSnapshotReady(ctx, snap)
+			if err != nil {
+				slog.WarnContext(ctx, "failed to read the readiness of a tag's volume snapshot",
+					slog.String("tag", tagRef.String()), slog.String("volume_name", snap.GetSourceVolumeName()), slog.Any("error", err))
+				return
+			}
+			nowReady[i] = ready
+		})
+	}
+	wg.Wait()
+	if !slices.Contains(nowReady, true) {
+		return tag
+	}
+
+	updated, err := w.store.UpdateTag(ctx, tagRef, store.PreconditionFrom(tag), func(toUpdate *ateapipb.Tag) error {
+		if toUpdate.GetStatus().GetState() != ateapipb.TagState_TAG_STATE_CAPTURED {
+			return errTagNotCaptured
+		}
+		// The precondition pins the version that was read, so the entries line
+		// up with the ones asked about.
+		entries := toUpdate.GetStatus().GetSnapshot().GetVolumeSnapshots()
+		for i, ready := range nowReady {
+			if ready {
+				entries[i].ReadyToUse = true
+			}
+		}
+		toUpdate.Status.State = finalizedTagState(entries)
+		return nil
+	})
+	if err != nil {
+		slog.DebugContext(ctx, "did not record the readiness of a tag's volume snapshots", slog.String("tag", tagRef.String()), slog.Any("error", err))
+		// A concurrent write moved the row on; return what is stored now
+		// rather than the stale copy.
+		if current, getErr := w.store.GetTag(ctx, tagRef); getErr == nil {
+			return current
+		}
+		return tag
+	}
+	return updated
+}
+
+// errTagNotCaptured is what RefreshTagState's mutate closure returns when the
+// stored tag left TAG_STATE_CAPTURED since it was read.
+var errTagNotCaptured = errors.New("tag is no longer captured")
+
+// volumeSnapshotReady reports whether the storage system has finished one of a
+// tag's volume snapshots. A snapshot the driver cannot find is reported as not
+// ready: a driver without LIST_SNAPSHOTS cannot report on its own snapshots, so
+// not found does not mean gone.
+func (w *ActorWorkflow) volumeSnapshotReady(ctx context.Context, snap *ateapipb.ExternalVolumeSnapshot) (bool, error) {
+	plugin, err := w.pluginRegistry.GetPlugin(ctx, snap.GetVolumeType())
+	if err != nil {
+		return false, fmt.Errorf("while getting volume plugin for driver %q: %w", snap.GetVolumeType(), err)
+	}
+	observed, found, err := plugin.GetSnapshot(ctx, snap.GetStorageSnapshotId())
+	if err != nil {
+		return false, fmt.Errorf("while reading snapshot %q: %w", snap.GetStorageSnapshotId(), err)
+	}
+	return found && observed.ReadyToUse, nil
+}

@@ -126,7 +126,8 @@ type ControlClient interface {
 	// copy of that snapshot, so suspending or deleting the Actor afterwards
 	// cannot collect it.
 	CreateTag(ctx context.Context, in *CreateTagRequest, opts ...grpc.CallOption) (*Tag, error)
-	// Get a Tag.
+	// Get a Tag. A TAG_STATE_CAPTURED tag's volume snapshots are checked with
+	// the storage system first, so the returned tag reflects any that finished.
 	GetTag(ctx context.Context, in *GetTagRequest, opts ...grpc.CallOption) (*Tag, error)
 	// List Tags.
 	ListTags(ctx context.Context, in *ListTagsRequest, opts ...grpc.CallOption) (*ListTagsResponse, error)
@@ -668,7 +669,8 @@ type ControlServer interface {
 	// copy of that snapshot, so suspending or deleting the Actor afterwards
 	// cannot collect it.
 	CreateTag(context.Context, *CreateTagRequest) (*Tag, error)
-	// Get a Tag.
+	// Get a Tag. A TAG_STATE_CAPTURED tag's volume snapshots are checked with
+	// the storage system first, so the returned tag reflects any that finished.
 	GetTag(context.Context, *GetTagRequest) (*Tag, error)
 	// List Tags.
 	ListTags(context.Context, *ListTagsRequest) (*ListTagsResponse, error)

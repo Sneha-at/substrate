@@ -76,7 +76,9 @@ func (s *RPCService) GetTag(ctx context.Context, req *ateapipb.GetTagRequest) (*
 	if err != nil {
 		return nil, fmt.Errorf("while getting tag: %w", err)
 	}
-	return tag, nil
+	// A captured tag's volume snapshots may have finished since it was
+	// stored; GetTag is how a caller sees that.
+	return s.actorWorkflow.RefreshTagState(ctx, tag), nil
 }
 
 func (s *ServiceImpl) GetTag(ctx context.Context, tagRef resources.TagRef) (*ateapipb.Tag, error) {

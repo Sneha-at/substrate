@@ -157,7 +157,8 @@ const (
 	TagState_TAG_STATE_DELETING TagState = 3
 	// Creation completed, but at least one volume snapshot was not yet ready to
 	// use when last observed. Actors can be created from the tag; restoring a
-	// volume waits until its snapshot is ready.
+	// volume waits until its snapshot is ready. GetTag checks the snapshots
+	// again and moves the tag to TAG_STATE_READY once all of them are.
 	TagState_TAG_STATE_CAPTURED TagState = 4
 	// Creation failed. The tag cannot be used, and deleting it releases whatever
 	// the failed creation left behind. Terminal.
@@ -637,9 +638,11 @@ type ExternalVolumeSnapshot struct {
 	// ready_to_use is whether the storage system had finished the snapshot when
 	// it was last observed. False is not a failure: drivers may return a usable
 	// handle while the copy proceeds in the background, and tag creation does not
-	// wait for it. Restore checks readiness again at that point, so this records
-	// what was seen rather than a durable property, and is per-volume so a
-	// lagging volume can be named.
+	// wait for it. GetTag on a TAG_STATE_CAPTURED tag asks the storage system
+	// again and records a snapshot that has since finished; once true it stays
+	// true. Restore checks readiness again at that point, so this records what
+	// was seen rather than a durable property, and is per-volume so a lagging
+	// volume can be named.
 	//
 	// +k8s:optional
 	ReadyToUse bool `protobuf:"varint,4,opt,name=ready_to_use,json=readyToUse,proto3" json:"ready_to_use,omitempty"`

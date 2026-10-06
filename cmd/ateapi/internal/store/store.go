@@ -153,7 +153,9 @@ type Interface interface {
 	//
 	// status.snapshot is immutable once snapshot_uri is set. Before that, while
 	// the tag is pending, the volume_snapshots list is fixed once recorded and
-	// each entry's storage_snapshot_id may be filled in once.
+	// each entry's storage_snapshot_id may be filled in once. Either way, an
+	// entry with a storage_snapshot_id may still have ready_to_use go from
+	// false to true.
 	UpdateTag(ctx context.Context, tagRef resources.TagRef, precondition Precondition, mutate func(toUpdate *ateapipb.Tag) error) (*ateapipb.Tag, error)
 
 	// Deletes and returns a tag. Returns ErrNotFound if missing, or

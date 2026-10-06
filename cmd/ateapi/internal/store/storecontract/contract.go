@@ -1464,6 +1464,46 @@ func runTagContractTests(t *testing.T, setup func(t *testing.T) store.Interface)
 		}); !errors.Is(err, store.ErrImmutableField) {
 			t.Errorf("filling in a handle after finalize = %v, want one matching store.ErrImmutableField", err)
 		}
+
+		// Readiness the storage system reports later can still be recorded on
+		// an entry with a handle, and only in that direction.
+		sealed := []struct {
+			name   string
+			mutate func(*ateapipb.Tag)
+		}{
+			{
+				name:   "marking an entry without a handle ready",
+				mutate: func(toUpdate *ateapipb.Tag) { toUpdate.Status.Snapshot.VolumeSnapshots[1].ReadyToUse = true },
+			},
+			{
+				name: "changing another field alongside readiness",
+				mutate: func(toUpdate *ateapipb.Tag) {
+					toUpdate.Status.Snapshot.VolumeSnapshots[0].ReadyToUse = true
+					toUpdate.Status.Snapshot.VolumeSnapshots[0].SizeBytes = 2048
+				},
+			},
+		}
+		for _, tt := range sealed {
+			t.Run("finalized "+tt.name, func(t *testing.T) {
+				if _, err := update(ready, tt.mutate); !errors.Is(err, store.ErrImmutableField) {
+					t.Errorf("UpdateTag error = %v, want one matching store.ErrImmutableField", err)
+				}
+			})
+		}
+		becameReady, err := update(ready, func(toUpdate *ateapipb.Tag) {
+			toUpdate.Status.Snapshot.VolumeSnapshots[0].ReadyToUse = true
+		})
+		if err != nil {
+			t.Fatalf("recording readiness after finalize failed: %v", err)
+		}
+		if !becameReady.GetStatus().GetSnapshot().GetVolumeSnapshots()[0].GetReadyToUse() {
+			t.Error("ready_to_use after recording it = false, want true")
+		}
+		if _, err := update(becameReady, func(toUpdate *ateapipb.Tag) {
+			toUpdate.Status.Snapshot.VolumeSnapshots[0].ReadyToUse = false
+		}); !errors.Is(err, store.ErrImmutableField) {
+			t.Errorf("clearing ready_to_use = %v, want one matching store.ErrImmutableField", err)
+		}
 	})
 
 	t.Run("CreateTag_ReusedTagName", func(t *testing.T) {

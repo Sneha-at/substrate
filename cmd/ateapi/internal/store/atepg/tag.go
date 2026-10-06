@@ -207,11 +207,19 @@ func validateUpdateTagMutation(storedTag, mutatedTag *ateapipb.Tag) error {
 // validateUpdateTagSnapshotMutation enforces that status.snapshot is immutable
 // once finalized (snapshot_uri is set), while allowing in-progress tag creation
 // to populate each pre-registered volume snapshot's handle at most once.
+//
+// The one change allowed on a recorded handle, before or after finalizing, is
+// ready_to_use moving from false to true, so readiness the storage system
+// reports later can be recorded.
 func validateUpdateTagSnapshotMutation(stored, mutated *ateapipb.ExternalSnapshot) error {
 	if stored == nil || proto.Equal(stored, mutated) {
 		return nil
 	}
-	if mutated == nil || stored.GetSnapshotUri() != "" {
+	if mutated == nil {
+		return fmt.Errorf("status.snapshot is immutable once set: mutation changed it from %s to %s", stored, mutated)
+	}
+	finalized := stored.GetSnapshotUri() != ""
+	if finalized && (stored.GetSnapshotUri() != mutated.GetSnapshotUri() || stored.GetContentScope() != mutated.GetContentScope()) {
 		return fmt.Errorf("status.snapshot is immutable once set: mutation changed it from %s to %s", stored, mutated)
 	}
 	if stored.GetContentScope() != ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_UNSPECIFIED && stored.GetContentScope() != mutated.GetContentScope() {
@@ -226,11 +234,28 @@ func validateUpdateTagSnapshotMutation(stored, mutated *ateapipb.ExternalSnapsho
 		if sv.GetSourceVolumeName() != mv.GetSourceVolumeName() || sv.GetSourceVolumeId() != mv.GetSourceVolumeId() || sv.GetVolumeType() != mv.GetVolumeType() {
 			return fmt.Errorf("status.snapshot.volume_snapshots[%d] identity is immutable: mutation changed it from %s to %s", i, sv, mv)
 		}
-		if sv.GetStorageSnapshotId() != "" && !proto.Equal(sv, mv) {
+		if sv.GetStorageSnapshotId() == "" {
+			if finalized && !proto.Equal(sv, mv) {
+				return fmt.Errorf("status.snapshot is immutable once set: mutation changed volume_snapshots[%d] from %s to %s", i, sv, mv)
+			}
+			continue
+		}
+		if !equalIgnoringReadiness(sv, mv) {
 			return fmt.Errorf("status.snapshot.volume_snapshots[%d] is immutable once storage_snapshot_id is set: mutation changed it from %s to %s", i, sv, mv)
+		}
+		if sv.GetReadyToUse() && !mv.GetReadyToUse() {
+			return fmt.Errorf("status.snapshot.volume_snapshots[%d].ready_to_use cannot go from true back to false", i)
 		}
 	}
 	return nil
+}
+
+// equalIgnoringReadiness reports whether two volume snapshots match in every
+// field but ready_to_use.
+func equalIgnoringReadiness(a, b *ateapipb.ExternalVolumeSnapshot) bool {
+	a, b = proto.CloneOf(a), proto.CloneOf(b)
+	a.ReadyToUse, b.ReadyToUse = false, false
+	return proto.Equal(a, b)
 }
 
 func (p *Persistence) UpdateTag(ctx context.Context, tagRef resources.TagRef, precondition store.Precondition, mutate func(*ateapipb.Tag) error) (*ateapipb.Tag, error) {

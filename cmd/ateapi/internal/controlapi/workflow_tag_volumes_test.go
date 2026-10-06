@@ -33,6 +33,7 @@ import (
 	"github.com/google/go-cmp/cmp/cmpopts"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/testing/protocmp"
 )
 
 const testVolumeDriver = "substrate.io/mock"
@@ -55,6 +56,12 @@ type fakeSnapshotPlugin struct {
 	// missingSnapshots are handles GetSnapshot reports as gone, standing in for
 	// a snapshot deleted behind the control plane's back.
 	missingSnapshots map[string]bool
+	// notReadySnapshots are handles GetSnapshot reports as not yet ready to
+	// use, whatever readyToUse says.
+	notReadySnapshots map[string]bool
+	// failGetSnapshot makes GetSnapshot fail, standing in for a driver that
+	// cannot be reached.
+	failGetSnapshot bool
 	// failDeleteSnapshot makes DeleteSnapshot fail, standing in for a driver
 	// that cannot release snapshots.
 	failDeleteSnapshot bool
@@ -63,11 +70,12 @@ type fakeSnapshotPlugin struct {
 	// caller issues the snapshots concurrently rather than one at a time.
 	rendezvous int
 
-	mu         sync.Mutex
-	created    []string
-	deleted    []string
-	arrived    int
-	allArrived chan struct{}
+	mu               sync.Mutex
+	created          []string
+	deleted          []string
+	getSnapshotCalls int
+	arrived          int
+	allArrived       chan struct{}
 }
 
 func newFakeSnapshotPlugin() *fakeSnapshotPlugin {
@@ -133,10 +141,16 @@ func (f *fakeSnapshotPlugin) CreateSnapshot(ctx context.Context, req volume.Crea
 }
 
 func (f *fakeSnapshotPlugin) GetSnapshot(_ context.Context, snapshotID string) (volume.Snapshot, bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.getSnapshotCalls++
+	if f.failGetSnapshot {
+		return volume.Snapshot{}, false, fmt.Errorf("simulated GetSnapshot failure for %q", snapshotID)
+	}
 	if f.missingSnapshots[snapshotID] {
 		return volume.Snapshot{}, false, nil
 	}
-	return volume.Snapshot{SnapshotID: snapshotID, ReadyToUse: f.readyToUse}, true, nil
+	return volume.Snapshot{SnapshotID: snapshotID, ReadyToUse: f.readyToUse && !f.notReadySnapshots[snapshotID]}, true, nil
 }
 
 func (f *fakeSnapshotPlugin) DeleteSnapshot(_ context.Context, snapshotID string) error {
@@ -862,4 +876,153 @@ func TestResolveVolumeSource(t *testing.T) {
 			t.Errorf("resolveVolumeSource() = %v, want FailedPrecondition", err)
 		}
 	})
+}
+
+// createCapturedTag tags an actor with the given volumes through a driver that
+// has not finished any snapshot, so the tag lands in TAG_STATE_CAPTURED.
+func createCapturedTag(t *testing.T, ctx context.Context, persistence store.Interface, plugin *fakeSnapshotPlugin, volumeNames ...string) (*ActorWorkflow, *ateapipb.Tag) {
+	t.Helper()
+	template := seedSubstrateTemplate(t, ctx, persistence, "sub-tmpl")
+	w, objects := newVolumeTagWorkflow(persistence, plugin)
+	actor := seedTagSourceWithVolumes(t, ctx, persistence, objects, template, "actor-1", volumeNames...)
+	plugin.readyToUse = false
+	tag, err := w.TagActorSnapshot(ctx, tagToCreate(resources.ActorRefFromActor(actor), "v1"), true, nil)
+	if err != nil {
+		t.Fatalf("TagActorSnapshot: %v", err)
+	}
+	if got, want := tag.GetStatus().GetState(), ateapipb.TagState_TAG_STATE_CAPTURED; got != want {
+		t.Fatalf("tag state = %v, want %v", got, want)
+	}
+	return w, tag
+}
+
+// volumeReadiness returns each volume snapshot's ready_to_use, by volume name.
+func volumeReadiness(tag *ateapipb.Tag) map[string]bool {
+	ready := map[string]bool{}
+	for _, snap := range tag.GetStatus().GetSnapshot().GetVolumeSnapshots() {
+		ready[snap.GetSourceVolumeName()] = snap.GetReadyToUse()
+	}
+	return ready
+}
+
+// TestRefreshTagState_CapturedBecomesReady verifies that refreshing a captured
+// tag records each volume snapshot as the driver reports it finished, and moves
+// the tag to TAG_STATE_READY only once all of them have.
+func TestRefreshTagState_CapturedBecomesReady(t *testing.T) {
+	ctx := context.Background()
+	persistence := newTestPersistence(t)
+	plugin := newFakeSnapshotPlugin()
+	w, tag := createCapturedTag(t, ctx, persistence, plugin, "data", "cache")
+	tagRef := resources.TagRefFromTag(tag)
+	cacheHandle := "snap-" + tagVolumeSnapshotID(tag.GetMetadata().GetUid(), "cache")
+
+	// Nothing has finished: the tag is returned as stored.
+	got := w.RefreshTagState(ctx, tag)
+	if got.GetMetadata().GetVersion() != tag.GetMetadata().GetVersion() {
+		t.Errorf("tag version after a refresh with nothing ready = %d, want unchanged %d", got.GetMetadata().GetVersion(), tag.GetMetadata().GetVersion())
+	}
+
+	// One volume finished: it is recorded, and the tag stays captured.
+	plugin.readyToUse = true
+	plugin.notReadySnapshots = map[string]bool{cacheHandle: true}
+	got = w.RefreshTagState(ctx, got)
+	if diff := cmp.Diff(map[string]bool{"data": true, "cache": false}, volumeReadiness(got)); diff != "" {
+		t.Errorf("readiness after one volume finished mismatch (-want +got):\n%s", diff)
+	}
+	if got, want := got.GetStatus().GetState(), ateapipb.TagState_TAG_STATE_CAPTURED; got != want {
+		t.Errorf("tag state with one volume still copying = %v, want %v", got, want)
+	}
+
+	// The last one finished: the tag is ready, and the store says so too.
+	plugin.notReadySnapshots = nil
+	got = w.RefreshTagState(ctx, got)
+	if got, want := got.GetStatus().GetState(), ateapipb.TagState_TAG_STATE_READY; got != want {
+		t.Errorf("tag state once every volume finished = %v, want %v", got, want)
+	}
+	stored, err := persistence.GetTag(ctx, tagRef)
+	if err != nil {
+		t.Fatalf("GetTag: %v", err)
+	}
+	if got, want := stored.GetStatus().GetState(), ateapipb.TagState_TAG_STATE_READY; got != want {
+		t.Errorf("stored tag state = %v, want %v", got, want)
+	}
+	if diff := cmp.Diff(map[string]bool{"data": true, "cache": true}, volumeReadiness(stored)); diff != "" {
+		t.Errorf("stored readiness mismatch (-want +got):\n%s", diff)
+	}
+}
+
+// TestRefreshTagState_LeavesTagWhenDriverCannotTell verifies that a driver
+// error or a snapshot the driver cannot find leaves a captured tag as stored,
+// rather than failing the read or calling the tag ready.
+func TestRefreshTagState_LeavesTagWhenDriverCannotTell(t *testing.T) {
+	for _, tt := range []struct {
+		name  string
+		setup func(plugin *fakeSnapshotPlugin, handle string)
+	}{
+		{name: "driver error", setup: func(plugin *fakeSnapshotPlugin, _ string) { plugin.failGetSnapshot = true }},
+		{name: "snapshot not found", setup: func(plugin *fakeSnapshotPlugin, handle string) {
+			plugin.missingSnapshots = map[string]bool{handle: true}
+		}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx := context.Background()
+			persistence := newTestPersistence(t)
+			plugin := newFakeSnapshotPlugin()
+			w, tag := createCapturedTag(t, ctx, persistence, plugin, "data")
+			plugin.readyToUse = true
+			tt.setup(plugin, "snap-"+tagVolumeSnapshotID(tag.GetMetadata().GetUid(), "data"))
+
+			got := w.RefreshTagState(ctx, tag)
+			if diff := cmp.Diff(tag, got, protocmp.Transform()); diff != "" {
+				t.Errorf("refreshed tag mismatch (-want +got):\n%s", diff)
+			}
+		})
+	}
+}
+
+// TestRefreshTagState_OnlyCapturedTags verifies that a tag in any state but
+// TAG_STATE_CAPTURED is returned without asking the driver anything.
+func TestRefreshTagState_OnlyCapturedTags(t *testing.T) {
+	ctx := context.Background()
+	persistence := newTestPersistence(t)
+	template := seedSubstrateTemplate(t, ctx, persistence, "sub-tmpl")
+	plugin := newFakeSnapshotPlugin()
+	w, objects := newVolumeTagWorkflow(persistence, plugin)
+	actor := seedTagSourceWithVolumes(t, ctx, persistence, objects, template, "actor-1", "data")
+	tag, err := w.TagActorSnapshot(ctx, tagToCreate(resources.ActorRefFromActor(actor), "v1"), true, nil)
+	if err != nil {
+		t.Fatalf("TagActorSnapshot: %v", err)
+	}
+	if got, want := tag.GetStatus().GetState(), ateapipb.TagState_TAG_STATE_READY; got != want {
+		t.Fatalf("tag state = %v, want %v", got, want)
+	}
+
+	if got := w.RefreshTagState(ctx, tag); got != tag {
+		t.Errorf("RefreshTagState returned %v, want the ready tag as passed in", got)
+	}
+	if plugin.getSnapshotCalls != 0 {
+		t.Errorf("GetSnapshot calls = %d, want none for a tag that is not captured", plugin.getSnapshotCalls)
+	}
+}
+
+// TestRefreshTagState_ConcurrentDelete verifies that a refresh racing a delete
+// does not move the tag back out of TAG_STATE_DELETING, and returns the row as
+// stored now rather than the stale captured copy.
+func TestRefreshTagState_ConcurrentDelete(t *testing.T) {
+	ctx := context.Background()
+	persistence := newTestPersistence(t)
+	plugin := newFakeSnapshotPlugin()
+	w, tag := createCapturedTag(t, ctx, persistence, plugin, "data")
+	if _, err := w.ensureTagDeleting(ctx, tag); err != nil {
+		t.Fatalf("ensureTagDeleting: %v", err)
+	}
+	plugin.readyToUse = true
+
+	got := w.RefreshTagState(ctx, tag)
+	if got, want := got.GetStatus().GetState(), ateapipb.TagState_TAG_STATE_DELETING; got != want {
+		t.Errorf("tag state after racing a delete = %v, want %v", got, want)
+	}
+	if volumeReadiness(got)["data"] {
+		t.Error("volume data recorded ready on a tag being deleted, want it left as stored")
+	}
 }

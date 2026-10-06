@@ -222,3 +222,62 @@ func TestCreateTag_UnknownVolumeName(t *testing.T) {
 		t.Errorf("GetTag() after a failed create = %v, want NotFound", err)
 	}
 }
+
+// copyingSnapshotPlugin is the mock volume plugin, except that CreateSnapshot
+// reports every snapshot as still copying. GetSnapshot reports it finished, so
+// the first look after creation sees it ready.
+type copyingSnapshotPlugin struct {
+	*volume.MockVolumePlugin
+}
+
+func (p copyingSnapshotPlugin) CreateSnapshot(ctx context.Context, req volume.CreateSnapshotRequest) (volume.Snapshot, error) {
+	snap, err := p.MockVolumePlugin.CreateSnapshot(ctx, req)
+	snap.ReadyToUse = false
+	return snap, err
+}
+
+// TestGetTag_RefreshesCapturedTag verifies that a tag whose volume snapshots
+// were still copying when it was created comes back TAG_STATE_CAPTURED, and
+// that GetTag moves it to TAG_STATE_READY once the driver reports them done.
+func TestGetTag_RefreshesCapturedTag(t *testing.T) {
+	ns := namespaceForTest("ns-tag-refresh")
+	tc := setupTestWithVolumePlugins(t, ns, map[string]volume.VolumePluginControlPlane{
+		"substrate.io/mock": copyingSnapshotPlugin{MockVolumePlugin: volume.NewMockVolumePlugin()},
+	})
+	defer tc.cleanup()
+	ctx := context.Background()
+	createTemplateWithVolumes(t, tc, ns,
+		[]*ateapipb.Volume{{Name: "data", ExternalVolumeTemplate: &ateapipb.ExternalVolumeTemplate{StorageClassName: "standard", Capacity: "1Gi"}}},
+		[]*ateapipb.VolumeMount{{Name: "data", MountPath: "/mnt/data"}})
+	workerName := createWorkerPod(t, tc, ns, "worker-1", "node1", "pool1")
+
+	suspendActorForTest(t, tc, workerName, "source")
+	tagRef := &ateapipb.ObjectRef{Atespace: testAtespace, Name: "copying"}
+	created, err := tc.client.CreateTag(ctx, &ateapipb.CreateTagRequest{
+		Tag: &ateapipb.Tag{
+			Metadata:    &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: tagRef.GetName()},
+			Scope:       ateapipb.TagScope_TAG_SCOPE_ATESPACE,
+			SourceActor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "source"},
+		},
+		IncludeExternalVolumes: true,
+	})
+	if err != nil {
+		t.Fatalf("CreateTag failed: %v", err)
+	}
+	if got, want := created.GetStatus().GetState(), ateapipb.TagState_TAG_STATE_CAPTURED; got != want {
+		t.Fatalf("created tag state = %v, want %v", got, want)
+	}
+
+	got, err := tc.client.GetTag(ctx, &ateapipb.GetTagRequest{Tag: tagRef})
+	if err != nil {
+		t.Fatalf("GetTag failed: %v", err)
+	}
+	if got, want := got.GetStatus().GetState(), ateapipb.TagState_TAG_STATE_READY; got != want {
+		t.Errorf("tag state from GetTag = %v, want %v", got, want)
+	}
+	for _, snap := range got.GetStatus().GetSnapshot().GetVolumeSnapshots() {
+		if !snap.GetReadyToUse() {
+			t.Errorf("volume %q ready_to_use = false, want true once the driver reports it", snap.GetSourceVolumeName())
+		}
+	}
+}
