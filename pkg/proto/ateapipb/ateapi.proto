@@ -172,10 +172,16 @@ service Control {
 }
 
 // ExternalSnapshot addresses a snapshot held in object storage.
+//
+// +k8s:customValidation # snapshot_uri is required unless volume_snapshots is set
 message ExternalSnapshot {
   // snapshot_uri addresses the snapshot's prefix in object storage.
   //
-  // +k8s:required
+  // Required, except on the snapshot of a tag still being created: that one
+  // records volume_snapshots before snapshot_uri is set, and setting
+  // snapshot_uri is what completes the tag.
+  //
+  // +k8s:optional
   // +k8s:maxLength=2048 # the template's storage_location bound plus the owner prefix and snapshot name
   string snapshot_uri = 1;
 
@@ -192,6 +198,96 @@ message ExternalSnapshot {
   // +k8s:optional
   // +k8s:format=k8s-uuid
   string actor_template_uid = 3;
+
+  // volume_snapshots holds one entry per external volume to be captured.
+  // Entries are added before the snapshots are taken and their
+  // storage_snapshot_id is filled in once the snapshot handles come back, so
+  // an entry with an empty storage_snapshot_id names a snapshot that did not
+  // finish or whose handle was never recorded.
+  // Actors seeded from a Tag provision their own volumes from these, so the
+  // entries are handles to copy from, not volumes to attach. Each template
+  // volume appears at most once.
+  //
+  // +k8s:optional
+  // +k8s:maxItems=32 # matches the template's volumes bound
+  // +k8s:listType=map
+  // +k8s:listMapKey=source_volume_name
+  repeated ExternalVolumeSnapshot volume_snapshots = 4;
+}
+
+// ExternalVolumeSnapshot is a point-in-time copy of one external volume, held
+// by the ExternalSnapshot that captured it. Volumes restored from it are new
+// volumes with their own IDs: the snapshot is never attached directly, so many
+// Actors can be seeded from one snapshot without sharing storage.
+message ExternalVolumeSnapshot {
+  // source_volume_name is the template volume this was captured from,
+  // matching the ExternalVolume of the same name on the source Actor. A
+  // restored volume keeps the name and takes a new storage_volume_id, which is
+  // what lets the attach and mount paths stay unaware of snapshots entirely.
+  //
+  // +k8s:required
+  // +k8s:format=k8s-short-name
+  // +k8s:update=NoModify
+  // +k8s:update=NoUnset # set-once; immutable would reject the create
+  // ratchet's nil->set when the final object is validated as an update
+  string source_volume_name = 1;
+
+  // storage_snapshot_id is the snapshot handle returned by the storage system.
+  // Empty until the storage system returns the handle, and set once. An entry
+  // left without one names a snapshot that failed, or one that was cut but
+  // whose handle was never recorded; deleting the tag recovers the handle of
+  // the latter from source_volume_id. Its format is the storage system's own,
+  // so it is only bounded and checked for control characters, like
+  // ExternalVolume.storage_volume_id.
+  //
+  // +k8s:optional
+  // +k8s:maxLength=256
+  // +k8s:update=NoModify
+  // +k8s:update=NoUnset
+  // +k8s:customValidation # no control characters
+  string storage_snapshot_id = 2;
+
+  // volume_type is the plugin or CSI driver that took the snapshot, copied
+  // from the source ExternalVolume. A restore must go through the same driver:
+  // a snapshot handle means nothing to any other one.
+  //
+  // +k8s:required
+  // +k8s:maxLength=253
+  // +k8s:update=NoModify
+  // +k8s:update=NoUnset
+  // +k8s:customValidation
+  string volume_type = 3;
+
+  // ready_to_use is whether the storage system had finished the snapshot when
+  // it was last observed. False is not a failure: drivers may return a usable
+  // handle while the copy proceeds in the background, and tag creation does not
+  // wait for it. Restore checks readiness again at that point, so this records
+  // what was seen rather than a durable property, and is per-volume so a
+  // lagging volume can be named.
+  //
+  // +k8s:optional
+  bool ready_to_use = 4;
+
+  // size_bytes is the snapshot's size as reported by the storage system, or 0
+  // if it did not report one. Carried because CreateSnapshot returns it, so
+  // recording it costs nothing and saves a later round trip.
+  //
+  // +k8s:optional
+  // +k8s:minimum=0
+  int64 size_bytes = 5;
+
+  // source_volume_id is the storage system's ID of the volume this was
+  // captured from, copied from the source ExternalVolume's storage_volume_id.
+  // CreateSnapshot is idempotent on the snapshot name and this ID, so deleting
+  // the tag can recover a handle that was never recorded without depending on
+  // the source Actor still existing.
+  //
+  // +k8s:required
+  // +k8s:maxLength=256
+  // +k8s:update=NoModify
+  // +k8s:update=NoUnset
+  // +k8s:customValidation # no control characters
+  string source_volume_id = 6;
 }
 
 // LocalSnapshot records information about a node-local snapshot.
@@ -1864,6 +1960,31 @@ message CreateTagRequest {
   //
   // +k8s:required
   Tag tag = 1;
+
+  // include_external_volumes opts the tag into capturing the source Actor's
+  // external volumes. Volumes are captured only when asked for: snapshotting
+  // them costs storage and time that a tag of the core session alone does not.
+  //
+  // Every external volume is captured unless external_volume_names narrows
+  // the set. Enabling this requires the driver of every captured volume to
+  // support snapshots, and fails the call if any does not.
+  //
+  // +k8s:optional
+  bool include_external_volumes = 2;
+
+  // external_volume_names limits the capture to these external volumes of the
+  // source Actor, named as in its ActorTemplate. Requires
+  // include_external_volumes; empty captures every external volume. A name
+  // the Actor has no external volume for fails the call.
+  //
+  // Volumes left out are not recorded on the tag, and an Actor created from
+  // it gets them provisioned empty.
+  //
+  // +k8s:optional
+  // +k8s:maxItems=32 # matches the template's volumes bound
+  // +k8s:listType=set
+  // +k8s:eachVal=+k8s:format=k8s-short-name
+  repeated string external_volume_names = 3;
 }
 
 // Request to update mutable fields on an existing Tag.

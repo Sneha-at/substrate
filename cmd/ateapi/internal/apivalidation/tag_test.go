@@ -184,6 +184,43 @@ func TestValidateCreateTagRequest(t *testing.T) {
 			},
 			wantError: field.ErrorList{field.Invalid(field.NewPath("tag", "scope"), nil, "").WithOrigin("minimum")},
 		},
+		{
+			name: "valid external_volume_names",
+			req: &ateapipb.CreateTagRequest{
+				Tag:                    validTag(),
+				IncludeExternalVolumes: true,
+				ExternalVolumeNames:    []string{"data", "cache"},
+			},
+			wantError: nil,
+		},
+		{
+			// Names alone would be ignored by the workflow, leaving the caller
+			// with a tag missing the volumes it named.
+			name: "external_volume_names without include_external_volumes",
+			req: &ateapipb.CreateTagRequest{
+				Tag:                 validTag(),
+				ExternalVolumeNames: []string{"data"},
+			},
+			wantError: field.ErrorList{field.Invalid(field.NewPath("external_volume_names"), nil, "")},
+		},
+		{
+			name: "invalid external_volume_names entry",
+			req: &ateapipb.CreateTagRequest{
+				Tag:                    validTag(),
+				IncludeExternalVolumes: true,
+				ExternalVolumeNames:    []string{"Data"},
+			},
+			wantError: field.ErrorList{field.Invalid(field.NewPath("external_volume_names").Index(0), nil, "").WithOrigin("format=k8s-short-name")},
+		},
+		{
+			name: "duplicate external_volume_names entry",
+			req: &ateapipb.CreateTagRequest{
+				Tag:                    validTag(),
+				IncludeExternalVolumes: true,
+				ExternalVolumeNames:    []string{"data", "data"},
+			},
+			wantError: field.ErrorList{field.Duplicate(field.NewPath("external_volume_names").Index(1), nil)},
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

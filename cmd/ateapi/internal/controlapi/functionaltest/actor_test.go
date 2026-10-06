@@ -3522,7 +3522,12 @@ func TestSuspendActor(t *testing.T) {
 		Scope:       ateapipb.TagScope_TAG_SCOPE_ATESPACE,
 		SourceActor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: name},
 		Status: &ateapipb.TagStatus{
-			Snapshot:         &ateapipb.ExternalSnapshot{SnapshotUri: tagSnapshotURI, ContentScope: sourceActor.GetStatus().GetExternalSnapshot().GetContentScope()},
+			// The tag was created without asking for volumes, so it records no
+			// volume snapshots.
+			Snapshot: &ateapipb.ExternalSnapshot{
+				SnapshotUri:  tagSnapshotURI,
+				ContentScope: sourceActor.GetStatus().GetExternalSnapshot().GetContentScope(),
+			},
 			ActorTemplateUid: tmpl.GetMetadata().GetUid(),
 			StorageLocation:  tmpl.GetSnapshotConfig().GetStorageLocation(),
 			State:            ateapipb.TagState_TAG_STATE_READY,

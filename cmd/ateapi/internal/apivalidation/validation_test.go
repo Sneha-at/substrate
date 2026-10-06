@@ -1197,6 +1197,15 @@ func TestValidateExternalSnapshot(t *testing.T) {
 			want: field.ErrorList{field.Required(uriPath, "")},
 		},
 		{
+			// A tag being created records the volumes it captures before it
+			// has a snapshot_uri.
+			name: "missing snapshot_uri on a pending tag's volume list",
+			obj: valid(func(s *ateapipb.ExternalSnapshot) {
+				s.SnapshotUri = ""
+				s.VolumeSnapshots = []*ateapipb.ExternalVolumeSnapshot{{SourceVolumeName: "data", SourceVolumeId: "vol-data", VolumeType: "substrate.io/mock"}}
+			}),
+		},
+		{
 			name: "snapshot_uri too long",
 			obj: valid(func(s *ateapipb.ExternalSnapshot) {
 				s.SnapshotUri = "gs://" + strings.Repeat("x", 2044)

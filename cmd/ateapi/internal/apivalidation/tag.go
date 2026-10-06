@@ -58,18 +58,22 @@ func ValidateTagUpdate(ctx context.Context, fldPath *field.Path, newVal, oldVal 
 }
 
 func ValidateCustom_CreateTagRequest(_ context.Context, _ operation.Operation, p *field.Path, req, _ *ateapipb.CreateTagRequest) field.ErrorList {
+	var errs field.ErrorList
+	// Names without the opt-in would otherwise be ignored, producing a tag
+	// without the volumes the caller named.
+	if len(req.GetExternalVolumeNames()) > 0 && !req.GetIncludeExternalVolumes() {
+		errs = append(errs, field.Invalid(p.Child("external_volume_names"), req.GetExternalVolumeNames(), "requires include_external_volumes"))
+	}
 	tag := req.GetTag()
 	sourceActorAtespace := tag.GetSourceActor().GetAtespace()
 	tagAtespace := tag.GetMetadata().GetAtespace()
 	if sourceActorAtespace == "" || tagAtespace == "" {
-		return nil // regular DV will handle it
+		return errs // regular DV will handle it
 	}
 	if tagAtespace != sourceActorAtespace {
-		return field.ErrorList{
-			field.Invalid(p.Child("tag", "metadata", "atespace"), tagAtespace, "must match source_actor.atespace"),
-		}
+		errs = append(errs, field.Invalid(p.Child("tag", "metadata", "atespace"), tagAtespace, "must match source_actor.atespace"))
 	}
-	return nil
+	return errs
 }
 
 // This exists only because nested subfield tags are not supported yet.
