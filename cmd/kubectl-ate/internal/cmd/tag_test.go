@@ -93,3 +93,25 @@ func TestParseTagScope(t *testing.T) {
 		t.Fatal("parseTagScope(global) succeeded")
 	}
 }
+
+func TestValidateTagVolumeFlags(t *testing.T) {
+	tests := []struct {
+		name        string
+		withVolumes bool
+		volumes     []string
+		wantErr     bool
+	}{
+		{name: "no volumes"},
+		{name: "all volumes", withVolumes: true},
+		{name: "named volumes", withVolumes: true, volumes: []string{"data"}},
+		{name: "names without --with-volumes", volumes: []string{"data"}, wantErr: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validateTagVolumeFlags(tt.withVolumes, tt.volumes)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("validateTagVolumeFlags(%v, %v) = %v, want error %v", tt.withVolumes, tt.volumes, err, tt.wantErr)
+			}
+		})
+	}
+}

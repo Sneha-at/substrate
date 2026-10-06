@@ -32,9 +32,14 @@ var (
 	createTagAtespaceFlag  string
 	createTagActorFlag     string
 	createTagScopeFlag     string
-	updateTagAtespaceFlag  string
-	updateTagScopeFlag     string
-	deleteTagAtespaceFlag  string
+	// createTagWithVolumesFlag opts the tag into capturing the actor's external
+	// volumes as well as its core session.
+	createTagWithVolumesFlag bool
+	// createTagVolumesFlag narrows --with-volumes to these volume names.
+	createTagVolumesFlag  []string
+	updateTagAtespaceFlag string
+	updateTagScopeFlag    string
+	deleteTagAtespaceFlag string
 )
 
 var getTagsCmd = &cobra.Command{
@@ -102,6 +107,9 @@ var createTagCmd = &cobra.Command{
 		"again or deleting it cannot collect what the tag names.",
 	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
+		if err := validateTagVolumeFlags(createTagWithVolumesFlag, createTagVolumesFlag); err != nil {
+			return err
+		}
 		scope, err := parseTagScope(createTagScopeFlag)
 		if err != nil {
 			return err
@@ -119,6 +127,8 @@ var createTagCmd = &cobra.Command{
 				Scope:       scope,
 				SourceActor: &ateapipb.ObjectRef{Atespace: createTagAtespaceFlag, Name: createTagActorFlag},
 			},
+			IncludeExternalVolumes: createTagWithVolumesFlag,
+			ExternalVolumeNames:    createTagVolumesFlag,
 		})
 		if err != nil {
 			return fmt.Errorf("failed to create tag: %w", err)
@@ -205,6 +215,15 @@ func parseTagScope(value string) (ateapipb.TagScope, error) {
 	}
 }
 
+// validateTagVolumeFlags rejects --volumes without --with-volumes, which would
+// otherwise be ignored and produce a tag without the volumes the caller named.
+func validateTagVolumeFlags(withVolumes bool, volumes []string) error {
+	if len(volumes) > 0 && !withVolumes {
+		return fmt.Errorf("--volumes requires --with-volumes")
+	}
+	return nil
+}
+
 func init() {
 	getTagsCmd.Flags().StringVarP(&getTagAtespaceFlag, "atespace", "a", "", "Atespace to list/get tags in")
 	getTagsCmd.Flags().BoolVarP(&getTagAllAtespacesFlag, "all-atespaces", "A", false, "List tags across all atespaces")
@@ -215,6 +234,8 @@ func init() {
 	createTagCmd.Flags().StringVar(&createTagActorFlag, "actor", "", "Name of the suspended actor whose external snapshot to tag (required)")
 	_ = createTagCmd.MarkFlagRequired("actor")
 	createTagCmd.Flags().StringVar(&createTagScopeFlag, "scope", "atespace", "Tag scope: atespace or published")
+	createTagCmd.Flags().BoolVar(&createTagWithVolumesFlag, "with-volumes", false, "Also snapshot the actor's external volumes, so actors created from this tag start from a copy of their data")
+	createTagCmd.Flags().StringSliceVar(&createTagVolumesFlag, "volumes", nil, "With --with-volumes, snapshot only these volumes (comma-separated template volume names); others come up empty on actors created from the tag. Defaults to all")
 	createCmd.AddCommand(createTagCmd)
 
 	updateTagCmd.Flags().StringVarP(&updateTagAtespaceFlag, "atespace", "a", "", "Atespace owning the tag (required)")
