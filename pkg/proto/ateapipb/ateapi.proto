@@ -1236,9 +1236,11 @@ message SandboxConfig {
 // stored.
 message SnapshotConfig {
   // storage_location is the base object-storage URI snapshots of actors on
-  // this version are stored under. Required.
+  // this version are stored under. It is required only when ate-api-server
+  // runs with the SnapshotStorageLocation preview gate enabled.
   //
-  // +k8s:required
+  // +k8s:ifEnabled(SnapshotStorageLocation)=+k8s:required
+  // +k8s:optional
   // +k8s:maxLength=1024
   // +k8s:customValidation # Validate URI
   string storage_location = 1;
