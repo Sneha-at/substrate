@@ -371,7 +371,8 @@ func TestValidateActorTemplate(t *testing.T) {
 	}, {
 		name:   "missing storage_location",
 		mutate: func(tmpl *ateapipb.ActorTemplate) { tmpl.SnapshotConfig.StorageLocation = "" },
-		// Without the gate the field is optional.
+		// Without the gate the field is ignored in favor of
+		// --snapshot-bucket-prefix, so it may be empty.
 		want: nil,
 		wantWithPreview: map[string]field.ErrorList{
 			"SnapshotStorageLocation": {field.Required(field.NewPath("snapshot_config", "storage_location"), "")},

@@ -128,6 +128,20 @@ func TestLoadFlagsFromEnvActorJWTIssuer(t *testing.T) {
 	}
 }
 
+func TestLoadFlagsFromEnvSnapshotBucketPrefix(t *testing.T) {
+	old := *snapshotBucketPrefix
+	t.Cleanup(func() { *snapshotBucketPrefix = old })
+	*snapshotBucketPrefix = "@env"
+	t.Setenv("ATE_API_SNAPSHOT_BUCKET_PREFIX", "gs://ate-snapshots/")
+
+	if err := loadFlagsFromEnv(); err != nil {
+		t.Fatal(err)
+	}
+	if *snapshotBucketPrefix != "gs://ate-snapshots/" {
+		t.Errorf("--snapshot-bucket-prefix = %q, want %q", *snapshotBucketPrefix, "gs://ate-snapshots/")
+	}
+}
+
 func TestPostgresConnectionAttrNeverLogsThePassword(t *testing.T) {
 	const password = "hunter2-very-secret"
 	render := func(connString string) string {
