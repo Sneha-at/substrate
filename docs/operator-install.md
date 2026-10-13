@@ -320,6 +320,27 @@ demos, the [benchmarks](../benchmarking/README.md#settings), and the
 | `rolloutTimeout`                             | `ATE_INSTALL_ROLLOUT_TIMEOUT`                   | `--rollout-timeout`                                | `1m0s`                | (global)                                 |
 | `storage.bucketName`                         | `BUCKET_NAME`                                   | `--storage-bucket-name`                            | —                     | (global)                                 |
 
+## Snapshot storage
+
+By default, ate-api-server stores every actor and tag snapshot under its
+`--snapshot-bucket-prefix`. The manifest passes `--snapshot-bucket-prefix=@env`,
+which ate-api-server resolves from the `ate-api-server-envvars` ConfigMap.
+ate-setup sets it there to `gs://<storage.bucketName>/` and, unless the
+`SnapshotStorageLocation` preview gate is enabled, fails before deploying if
+`storage.bucketName` is empty. The kind profile
+defaults it to `ate-snapshots`, a bucket the in-cluster object store creates.
+On GKE, ate-setup does not create the bucket or grant access to it: run
+`go run ./tools/setup-gcp create bucket` and `go run ./tools/setup-gcp create iam`
+first, or `bootstrap` for both (see [tools/setup-gcp](../tools/setup-gcp/README.md)). If you deploy
+ate-api-server some other way, pass the flag yourself: without the gate, the
+server refuses to start without it.
+
+An ActorTemplate's `snapshotConfig.storageLocation` is a preview field. It is
+honored only with the `SnapshotStorageLocation` preview gate
+(`preview: SnapshotStorageLocation`), with `--snapshot-bucket-prefix` as the
+fallback for templates that leave it empty. Without the gate, ate-api-server
+ignores it. See [Snapshot Storage Layout](api-guide.md#snapshot-storage-layout).
+
 ## Secrets
 
 Credentials should come from the environment, not from a document that gets
