@@ -15,6 +15,8 @@
 package controlapi
 
 import (
+	"go.ate.dev/substrate/internal/apierror"
+	"go.ate.dev/substrate/internal/preview"
 	"go.ate.dev/substrate/pkg/proto/ateapipb"
 )
 
@@ -148,4 +150,26 @@ func tagDurableSnapshotURI(tag *ateapipb.Tag, storageStatus ateapipb.SnapshotSto
 		return ""
 	}
 	return st.GetObject().GetSnapshotUri()
+}
+
+// resolveSnapshotLocation returns the base object-storage URI actorTemplate's
+// snapshots are stored under: its snapshotConfig.storage_location when the
+// SnapshotStorageLocation preview gate is enabled and the field is set,
+// otherwise bucketPrefix, ate-api-server's --snapshot-bucket-prefix. It fails
+// with FailedPrecondition when neither applies.
+//
+// It reads the process-wide gate rather than preview.IsEnabledFor, so a
+// request's preview opt-out cannot move where an actor's snapshots live.
+func resolveSnapshotLocation(bucketPrefix string, actorTemplate *ateapipb.ActorTemplate) (string, error) {
+	if preview.IsEnabled(preview.GateSnapshotStorageLocation) {
+		if location := actorTemplate.GetSnapshotConfig().GetStorageLocation(); location != "" {
+			return location, nil
+		}
+	}
+	if bucketPrefix != "" {
+		return bucketPrefix, nil
+	}
+	return "", apierror.FailedPrecondition(
+		"no snapshot storage location for actor template %s/%s: set ate-api-server's --snapshot-bucket-prefix, or enable the %q preview gate and set snapshotConfig.storageLocation",
+		actorTemplate.GetMetadata().GetAtespace(), actorTemplate.GetMetadata().GetName(), preview.GateSnapshotStorageLocation)
 }

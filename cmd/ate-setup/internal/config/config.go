@@ -137,7 +137,8 @@ type Config struct {
 	// defaults to the in-cluster URL of the install's ate-idp-server Service.
 	ActorJWTIssuer string
 
-	// BucketName is the snapshot bucket demos are templated with.
+	// BucketName is the snapshot bucket demos are templated with, and that
+	// ate-api-server's --snapshot-bucket-prefix points at.
 	BucketName string
 
 	// KODockerRepo is where ko pushes images (KO_DOCKER_REPO).
