@@ -115,6 +115,7 @@ type ActorWorkflow struct {
 	egressGatewayAddress string
 	pluginRegistry       VolumePluginRegistry
 	objectStorePlugin    objectstorev1.ControlProviderClient
+	snapshotBucketPrefix string
 }
 
 // NewActorWorkflow creates a new ActorWorkflow. instruments may be nil.
@@ -145,6 +146,12 @@ func NewActorWorkflow(
 		pluginRegistry:       pluginRegistry,
 		objectStorePlugin:    objectStorePlugin,
 	}
+}
+
+// snapshotLocation returns the base object-storage URI actorTemplate's
+// snapshots are stored under; see resolveSnapshotLocation.
+func (w *ActorWorkflow) snapshotLocation(actorTemplate *ateapipb.ActorTemplate) (string, error) {
+	return resolveSnapshotLocation(w.snapshotBucketPrefix, actorTemplate)
 }
 
 // cleanupSnapshot deletes every object under prefix through the control

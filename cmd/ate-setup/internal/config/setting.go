@@ -147,7 +147,7 @@ var Registry = []Setting{
 
 	{
 		Key: "storage.bucketName", Env: "BUCKET_NAME", Flag: "storage-bucket-name", Kind: KindString,
-		Usage: "Snapshot bucket the demos are templated with",
+		Usage: "Snapshot bucket the demos are templated with, and that ate-api-server stores snapshots under (required unless the SnapshotStorageLocation preview gate is enabled)",
 	},
 
 	{

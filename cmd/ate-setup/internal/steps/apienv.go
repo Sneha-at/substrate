@@ -29,6 +29,7 @@ import (
 	"go.ate.dev/substrate/cmd/ate-setup/internal/kube"
 	"go.ate.dev/substrate/cmd/ate-setup/internal/log"
 	"go.ate.dev/substrate/internal/installdefaults"
+	"go.ate.dev/substrate/internal/preview"
 )
 
 // envHashAnnotation carries a digest of the apiserver's environment on the pod
@@ -40,7 +41,7 @@ const envHashAnnotation = "ate.dev/env-hash"
 // store: both DSNs and the schema into the ate-api-server-secret-envvars Secret,
 // stable roles and Cloud SQL settings into the ConfigMap,
 // and an external server CA into postgres-server-ca. The ConfigMap also
-// carries the actor JWT issuer.
+// carries the actor JWT issuer and the snapshot bucket prefix.
 //
 // ate-api-server.yaml pulls both in through optional envFrom sources and
 // resolves the PostgreSQL connection, role, and schema flags from
@@ -52,6 +53,10 @@ const envHashAnnotation = "ate.dev/env-hash"
 // applies no Deployment.
 func (e *Env) CreateAPIServerEnvVars(ctx context.Context) error {
 	log.Step("create_api_server_env_vars")
+	bucketPrefix, err := snapshotBucketPrefix(e.Cfg.BucketName, e.Cfg.PreviewGates)
+	if err != nil {
+		return err
+	}
 	if err := e.Kube.EnsureNamespace(ctx, e.Namespace()); err != nil {
 		return err
 	}
@@ -129,6 +134,9 @@ func (e *Env) CreateAPIServerEnvVars(ctx context.Context) error {
 		configVars["ATE_API_POSTGRES_POOL_MAX_CONNS"] = poolMaxConns
 	}
 	configVars["ATE_API_ACTOR_JWT_ISSUER"] = e.Cfg.ActorJWTIssuer
+	if bucketPrefix != "" {
+		configVars["ATE_API_SNAPSHOT_BUCKET_PREFIX"] = bucketPrefix
+	}
 	if err := e.Kube.ApplyConfigMap(ctx, e.Namespace(), ConfigMapAPIEnvVars, configVars); err != nil {
 		return err
 	}
@@ -168,6 +176,25 @@ func sharedBootstrapOwnerWarning(enabled bool, bootstrapOwners, namespace string
 		}
 	}
 	return ""
+}
+
+// snapshotBucketPrefix is ate-api-server's --snapshot-bucket-prefix,
+// gs://<bucket>/. ate-api-server refuses to start without it unless the
+// SnapshotStorageLocation preview gate is enabled, so an empty bucket is an
+// error then.
+func snapshotBucketPrefix(bucket string, gates []string) (string, error) {
+	if bucket != "" {
+		return "gs://" + bucket + "/", nil
+	}
+	if previewGateEnabled(gates, preview.GateSnapshotStorageLocation) {
+		return "", nil
+	}
+	return "", fmt.Errorf("BUCKET_NAME must be set: ate-api-server stores snapshots under gs://$BUCKET_NAME/ unless the %s preview gate is enabled", preview.GateSnapshotStorageLocation)
+}
+
+// previewGateEnabled reports whether gates, a --preview value, enables gate.
+func previewGateEnabled(gates []string, gate preview.Gate) bool {
+	return slices.Contains(gates, "*") || slices.Contains(gates, string(gate))
 }
 
 // buildAPIServerEnvVars is the Secret payload. ate-api-server takes both

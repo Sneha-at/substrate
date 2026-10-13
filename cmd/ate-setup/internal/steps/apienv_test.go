@@ -108,6 +108,7 @@ func TestCreateAPIServerEnvVarsPostgresIdentities(t *testing.T) {
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			tc.cfg.BucketName = "ate-snapshots"
 			e := &Env{Cfg: &tc.cfg, Kube: fakeKube(t,
 				&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: NamespaceAteSystem}},
 				&corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: ConfigMapAPIEnvVars, Namespace: NamespaceAteSystem}},
@@ -142,6 +143,7 @@ func TestCreateAPIServerEnvVarsPostgresIdentities(t *testing.T) {
 
 func TestCreateAPIServerEnvVarsRejectsCustomBundledIdentity(t *testing.T) {
 	cfg := config.Config{PostgresReadWriteRole: "tenant_readwrite", PostgresOwnerRole: "tenant_owner"}
+	cfg.BucketName = "ate-snapshots"
 	e := &Env{Cfg: &cfg, Kube: fakeKube(t,
 		&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: NamespaceAteSystem}},
 		&corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: ConfigMapAPIEnvVars, Namespace: NamespaceAteSystem}},
@@ -265,6 +267,7 @@ func TestCreateAPIServerEnvVarsPoolSize(t *testing.T) {
 		PostgresReadWriteConnectionString: "postgres://runtime@postgres/atepg",
 		PostgresPoolMaxConns:              "20",
 	}
+	cfg.BucketName = "ate-snapshots"
 	e := &Env{Cfg: &cfg, Kube: fakeKube(t,
 		&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: NamespaceAteSystem}},
 		&corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: ConfigMapAPIEnvVars, Namespace: NamespaceAteSystem}},
@@ -293,6 +296,7 @@ func TestCreateAPIServerEnvVarsActorJWTIssuer(t *testing.T) {
 		PostgresReadWriteConnectionString: "postgres://runtime@postgres/atepg",
 		ActorJWTIssuer:                    "https://idp.example.com/prod",
 	}
+	cfg.BucketName = "ate-snapshots"
 	e := &Env{Cfg: &cfg, Kube: fakeKube(t,
 		&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: NamespaceAteSystem}},
 		&corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: ConfigMapAPIEnvVars, Namespace: NamespaceAteSystem}},
@@ -353,6 +357,7 @@ func TestCreateAPIServerEnvVarsAdoptsPostgresIdentity(t *testing.T) {
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			tc.cfg.BucketName = "ate-snapshots"
 			e := &Env{Cfg: &tc.cfg, Kube: fakeKube(t,
 				&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: NamespaceAteSystem}},
 				&corev1.ConfigMap{
@@ -530,7 +535,7 @@ func TestAnnotateAPIServerEnvHash(t *testing.T) {
 // Deployment, patches the running one.
 func TestOnlyAStandaloneEnvUpdateRollsTheAPIServer(t *testing.T) {
 	newEnv := func(t *testing.T) *Env {
-		return &Env{Cfg: &config.Config{PostgresReadWriteConnectionString: "postgres://runtime@postgres/atepg"},
+		return &Env{Cfg: &config.Config{PostgresReadWriteConnectionString: "postgres://runtime@postgres/atepg", BucketName: "ate-snapshots"},
 			Kube: fakeKube(t,
 				&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: NamespaceAteSystem}},
 				&corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: ConfigMapAPIEnvVars, Namespace: NamespaceAteSystem}},
@@ -699,6 +704,7 @@ func TestCreateAPIServerEnvVarsOmitsAuthz(t *testing.T) {
 		PostgresOwnerRole:          config.DefaultPostgresOwnerRole,
 		APIExperimentalEnableAuthz: true,
 		APIAuthzBootstrapOwners:    "system:serviceaccount:ate-system:ate-client",
+		BucketName:                 "ate-snapshots",
 	}, Kube: fakeKube(t,
 		&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: NamespaceAteSystem}},
 		apiServerEnvVarsConfigMap(map[string]string{}),

@@ -2990,8 +2990,10 @@ func (x *SandboxConfig) GetConfigName() string {
 type SnapshotConfig struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// storage_location is the base object-storage URI snapshots of actors on
-	// this version are stored under. It is required only when ate-api-server
-	// runs with the SnapshotStorageLocation preview gate enabled.
+	// this version are stored under. It is required and honored only when
+	// ate-api-server runs with the SnapshotStorageLocation preview gate
+	// enabled; otherwise it is ignored and snapshots are stored under
+	// ate-api-server's --snapshot-bucket-prefix.
 	//
 	// +k8s:ifEnabled(SnapshotStorageLocation)=+k8s:required
 	// +k8s:optional

@@ -73,6 +73,10 @@ type VolumePluginRegistry interface {
 // nil; ate-api always builds one.
 //
 // actorJWTIssuer is copied verbatim into the iss claim of every actor JWT.
+//
+// snapshotBucketPrefix is the base location snapshots are stored under unless
+// the SnapshotStorageLocation preview gate is enabled and the actor template
+// sets its own snapshotConfig.storageLocation.
 func NewRPCService(
 	persistence store.Interface,
 	workerCache *workercache.Cache,
@@ -87,8 +91,10 @@ func NewRPCService(
 	actorJWTIssuer string,
 	actorIDJWTPool localjwtauthority.Pool,
 	actorIDCAPool localca.Pool,
+	snapshotBucketPrefix string,
 ) *RPCService {
 	impl := newServiceImpl(persistence, storageClassLister)
+	impl.snapshotBucketPrefix = snapshotBucketPrefix
 	s := &RPCService{
 		impl:                  impl,
 		persistence:           persistence,
@@ -104,6 +110,7 @@ func NewRPCService(
 		actorIDCAPool:         actorIDCAPool,
 	}
 	s.actorWorkflow = NewActorWorkflow(impl, workerCache, dialer, sandboxConfigLister, storageClassLister, instruments, egressGatewayAddress, s, objectStorePlugin)
+	s.actorWorkflow.snapshotBucketPrefix = snapshotBucketPrefix
 	s.workerWorkflow = NewWorkerWorkflow(impl)
 	return s
 }
@@ -177,6 +184,10 @@ type ServiceImpl struct {
 	store store.Interface
 
 	storageClassLister storagev1listers.StorageClassLister
+
+	// snapshotBucketPrefix is ate-api-server's --snapshot-bucket-prefix; see
+	// resolveSnapshotLocation.
+	snapshotBucketPrefix string
 }
 
 var _ store.Interface = (*ServiceImpl)(nil)

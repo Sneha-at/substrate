@@ -43,7 +43,8 @@ const (
 	GateExternalVolumes Gate = "ExternalVolumes"
 
 	// GateSnapshotStorageLocation controls whether an ActorTemplate's
-	// snapshotConfig.storage_location is required.
+	// snapshotConfig.storage_location is honored. When disabled, snapshots
+	// are stored under ate-api-server's --snapshot-bucket-prefix.
 	GateSnapshotStorageLocation Gate = "SnapshotStorageLocation"
 )
 
