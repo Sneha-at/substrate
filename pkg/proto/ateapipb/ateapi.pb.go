@@ -3031,9 +3031,11 @@ func (x *ActorTemplateStatus) GetGoldenSnapshotStatus() *GoldenSnapshotStatus {
 type SnapshotConfig struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// storage_location is the base object-storage URI snapshots of actors on
-	// this version are stored under. Required.
+	// this version are stored under. It is required only when ate-api-server
+	// runs with the SnapshotStorageLocation preview gate enabled.
 	//
-	// +k8s:required
+	// +k8s:ifEnabled(SnapshotStorageLocation)=+k8s:required
+	// +k8s:optional
 	// +k8s:maxLength=1024
 	// +k8s:customValidation # Validate URI
 	StorageLocation string `protobuf:"bytes,1,opt,name=storage_location,json=storageLocation,proto3" json:"storage_location,omitempty"`

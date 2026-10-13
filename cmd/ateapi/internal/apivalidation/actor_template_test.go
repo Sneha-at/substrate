@@ -125,11 +125,11 @@ func TestValidateCreateActorTemplateRequest(t *testing.T) {
 		})},
 		field.ErrorList{field.Required(field.NewPath("actor_template", "snapshot_config"), "")},
 	}, {
-		"missing snapshot_config.storage_location",
+		"snapshot_config.storage_location is not needed when the preview gate is off",
 		&ateapipb.CreateActorTemplateRequest{ActorTemplate: validActorTemplate(func(tmpl *ateapipb.ActorTemplate) {
 			tmpl.SnapshotConfig.StorageLocation = ""
 		})},
-		field.ErrorList{field.Required(field.NewPath("actor_template", "snapshot_config", "storage_location"), "")},
+		nil,
 	}, {
 		"storage_location without a bucket",
 		&ateapipb.CreateActorTemplateRequest{ActorTemplate: validActorTemplate(func(tmpl *ateapipb.ActorTemplate) {
@@ -371,7 +371,12 @@ func TestValidateActorTemplate(t *testing.T) {
 	}, {
 		name:   "missing storage_location",
 		mutate: func(tmpl *ateapipb.ActorTemplate) { tmpl.SnapshotConfig.StorageLocation = "" },
-		want:   field.ErrorList{field.Required(field.NewPath("snapshot_config", "storage_location"), "")},
+		// Without the gate the field is optional.
+		want: nil,
+		wantWithPreview: map[string]field.ErrorList{
+			"SnapshotStorageLocation": {field.Required(field.NewPath("snapshot_config", "storage_location"), "")},
+			"*":                       {field.Required(field.NewPath("snapshot_config", "storage_location"), "")},
+		},
 	}, {
 		name: "unspecified snapshot scope",
 		mutate: func(tmpl *ateapipb.ActorTemplate) {
