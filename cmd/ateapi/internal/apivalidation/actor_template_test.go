@@ -376,7 +376,7 @@ func TestValidateActorTemplate(t *testing.T) {
 		want: nil,
 		wantWithPreview: map[string]field.ErrorList{
 			"SnapshotStorageLocation": {field.Required(field.NewPath("snapshot_config", "storage_location"), "")},
-			"*":                       {field.Required(field.NewPath("snapshot_config", "storage_location"), "")},
+			preview.All:               {field.Required(field.NewPath("snapshot_config", "storage_location"), "")},
 		},
 	}, {
 		name: "unspecified snapshot scope",

@@ -177,7 +177,8 @@ func TestCreateAPIServerEnvVarsKeepsExternalPostgres(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			cfg := config.Config{
 				PostgresReadWriteRole: config.DefaultPostgresReadWriteRole, PostgresOwnerRole: config.DefaultPostgresOwnerRole,
-				CloudSQL: tc.cloudSQL,
+				CloudSQL:   tc.cloudSQL,
+				BucketName: "ate-snapshots",
 			}
 			e := &Env{Cfg: &cfg, Kube: fakeKube(t,
 				&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: NamespaceAteSystem}},
@@ -229,7 +230,7 @@ func TestCreateAPIServerEnvVarsKeepsOwnerLogin(t *testing.T) {
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			cfg := config.Config{PostgresReadWriteConnectionString: readWrite, PostgresOwnerConnectionString: tc.owner}
+			cfg := config.Config{PostgresReadWriteConnectionString: readWrite, PostgresOwnerConnectionString: tc.owner, BucketName: "ate-snapshots"}
 			e := &Env{Cfg: &cfg, Kube: fakeKube(t,
 				&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: NamespaceAteSystem}},
 				&corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: ConfigMapAPIEnvVars, Namespace: NamespaceAteSystem}},
@@ -778,7 +779,7 @@ func TestCreateAPIServerEnvVarsSnapshotBucketPrefix(t *testing.T) {
 		gates: []string{"SnapshotStorageLocation"},
 	}, {
 		name:  "unset without a bucket when every gate is on",
-		gates: []string{"*"},
+		gates: []string{"ALL"},
 	}, {
 		name:    "an error without a bucket when the gate is off",
 		gates:   []string{"ExternalVolumes"},
