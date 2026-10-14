@@ -194,7 +194,7 @@ func snapshotBucketPrefix(bucket string, gates []string) (string, error) {
 
 // previewGateEnabled reports whether gates, a --preview value, enables gate.
 func previewGateEnabled(gates []string, gate preview.Gate) bool {
-	return slices.Contains(gates, "*") || slices.Contains(gates, string(gate))
+	return slices.Contains(gates, preview.All) || slices.Contains(gates, string(gate))
 }
 
 // buildAPIServerEnvVars is the Secret payload. ate-api-server takes both
