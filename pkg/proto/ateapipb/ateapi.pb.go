@@ -2993,8 +2993,10 @@ type SnapshotConfig struct {
 	// this version are stored under. It is required and honored only when
 	// ate-api-server runs with the SnapshotStorageLocation preview gate
 	// enabled; otherwise it is ignored and snapshots are stored under
-	// ate-api-server's --snapshot-bucket-prefix.
+	// ate-api-server's --snapshot-bucket-prefix. With the gate enabled, a
+	// request that does not opt in to preview features may not set it.
 	//
+	// +ate:preview=SnapshotStorageLocation
 	// +k8s:ifEnabled(SnapshotStorageLocation)=+k8s:required
 	// +k8s:optional
 	// +k8s:maxLength=1024

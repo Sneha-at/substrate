@@ -225,9 +225,64 @@ func TestValidateCreateActorTemplateRequest_PreviewRestricted(t *testing.T) {
 	})
 	t.Run("restricted", func(t *testing.T) {
 		ctx := preview.ContextWithOptOut(context.Background())
-		want := field.ErrorList{field.Forbidden(field.NewPath("actor_template", "volumes").Index(0).Child("external_volume_template"), "")}
+		want := field.ErrorList{
+			field.Forbidden(field.NewPath("actor_template", "volumes").Index(0).Child("external_volume_template"), ""),
+			field.Forbidden(field.NewPath("actor_template", "snapshot_config", "storage_location"), ""),
+		}
 		assertValidateErr(t, ValidateCreateActorTemplateRequest(ctx, req), want)
 	})
+}
+
+func TestValidateCreateActorTemplateRequest_SnapshotStorageLocationOptIn(t *testing.T) {
+	storageLocation := field.NewPath("actor_template", "snapshot_config", "storage_location")
+	withoutLocation := func(tmpl *ateapipb.ActorTemplate) { tmpl.SnapshotConfig.StorageLocation = "" }
+	tests := []struct {
+		name   string
+		gates  string
+		optOut bool
+		mutate func(*ateapipb.ActorTemplate)
+		want   field.ErrorList
+	}{{
+		name:   "gate off, opted out, location set",
+		optOut: true,
+	}, {
+		name:   "gate off, opted out, no location",
+		optOut: true,
+		mutate: withoutLocation,
+	}, {
+		name:   "gate on, opted out, location set",
+		gates:  "SnapshotStorageLocation",
+		optOut: true,
+		want:   field.ErrorList{field.Forbidden(storageLocation, "")},
+	}, {
+		name:   "gate on, opted out, no location",
+		gates:  "SnapshotStorageLocation",
+		optOut: true,
+		mutate: withoutLocation,
+	}, {
+		name:  "gate on, opted in, location set",
+		gates: "SnapshotStorageLocation",
+	}, {
+		name:   "gate on, opted in, no location",
+		gates:  "SnapshotStorageLocation",
+		mutate: withoutLocation,
+		want:   field.ErrorList{field.Required(storageLocation, "")},
+	}}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			setPreviewForTest(t, tt.gates)
+			ctx := context.Background()
+			if tt.optOut {
+				ctx = preview.ContextWithOptOut(ctx)
+			}
+			var mutations []func(*ateapipb.ActorTemplate)
+			if tt.mutate != nil {
+				mutations = append(mutations, tt.mutate)
+			}
+			req := &ateapipb.CreateActorTemplateRequest{ActorTemplate: validActorTemplate(mutations...)}
+			assertValidateErr(t, ValidateCreateActorTemplateRequest(ctx, req), tt.want)
+		})
+	}
 }
 
 func TestValidateGetActorTemplateRequest(t *testing.T) {
