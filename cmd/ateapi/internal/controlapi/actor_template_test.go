@@ -25,6 +25,7 @@ import (
 	"go.ate.dev/substrate/cmd/ateapi/internal/store/storetest"
 	"go.ate.dev/substrate/internal/apierror"
 	"go.ate.dev/substrate/internal/objectstoreplugin/objectstoreplugintest"
+	"go.ate.dev/substrate/internal/preview"
 	"go.ate.dev/substrate/internal/resources"
 	"go.ate.dev/substrate/pkg/proto/ateapipb"
 	"google.golang.org/grpc/codes"
@@ -76,6 +77,68 @@ func TestCreateActorTemplate(t *testing.T) {
 	}
 	if created.GetMetadata().GetName() != "tmpl-a" {
 		t.Errorf("created name = %q, want tmpl-a", created.GetMetadata().GetName())
+	}
+}
+
+// TestCreateActorTemplate_RequiresSnapshotLocation pins that create rejects,
+// with FailedPrecondition, a template whose actors would have no snapshot
+// location: neither an honored storageLocation nor --snapshot-bucket-prefix.
+func TestCreateActorTemplate_RequiresSnapshotLocation(t *testing.T) {
+	tests := []struct {
+		name     string
+		gates    []string
+		optOut   bool
+		prefix   string
+		location string
+		wantCode codes.Code
+	}{{
+		name:     "gate off, prefix set",
+		prefix:   "gs://prefix-bucket/",
+		location: "gs://my-bucket/snapshots",
+		wantCode: codes.OK,
+	}, {
+		name:     "gate off, no prefix",
+		location: "gs://my-bucket/snapshots",
+		wantCode: codes.FailedPrecondition,
+	}, {
+		name:     "gate on, location set, no prefix",
+		gates:    []string{"SnapshotStorageLocation"},
+		location: "gs://my-bucket/snapshots",
+		wantCode: codes.OK,
+	}, {
+		name:     "gate on, opted out, no location, prefix set",
+		gates:    []string{"SnapshotStorageLocation"},
+		optOut:   true,
+		prefix:   "gs://prefix-bucket/",
+		wantCode: codes.OK,
+	}, {
+		name:     "gate on, opted out, no location, no prefix",
+		gates:    []string{"SnapshotStorageLocation"},
+		optOut:   true,
+		wantCode: codes.FailedPrecondition,
+	}}
+	for i, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			preview.InitForTest(t, tt.gates...)
+			persistence := newTestPersistence(t)
+			impl := newServiceImpl(persistence, nil)
+			impl.snapshotBucketPrefix = tt.prefix
+			s := &RPCService{impl: impl, sandboxConfigLister: gvisorDefaultLister(t)}
+			ctx := context.Background()
+			if _, err := persistence.CreateAtespace(ctx, &ateapipb.Atespace{Metadata: &ateapipb.ResourceMetadata{Name: "ns1"}}); err != nil {
+				t.Fatalf("CreateAtespace failed: %v", err)
+			}
+			if tt.optOut {
+				ctx = preview.ContextWithOptOut(ctx)
+			}
+			req := &ateapipb.CreateActorTemplateRequest{ActorTemplate: validActorTemplate(func(tmpl *ateapipb.ActorTemplate) {
+				tmpl.Metadata = &ateapipb.ResourceMetadata{Atespace: "ns1", Name: fmt.Sprintf("tmpl-%d", i)}
+				tmpl.SnapshotConfig.StorageLocation = tt.location
+			})}
+			if _, err := s.CreateActorTemplate(ctx, req); apierror.Code(err) != tt.wantCode {
+				t.Errorf("CreateActorTemplate error = %v, want code %v", err, tt.wantCode)
+			}
+		})
 	}
 }
 
