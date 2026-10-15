@@ -18,6 +18,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"maps"
 	"os"
@@ -30,6 +31,7 @@ import (
 	"go.ate.dev/substrate/cmd/ate-setup/internal/log"
 	"go.ate.dev/substrate/internal/installdefaults"
 	"go.ate.dev/substrate/internal/preview"
+	"go.ate.dev/substrate/internal/resources"
 )
 
 // envHashAnnotation carries a digest of the apiserver's environment on the pod
@@ -41,7 +43,7 @@ const envHashAnnotation = "ate.dev/env-hash"
 // store: both DSNs and the schema into the ate-api-server-secret-envvars Secret,
 // stable roles and Cloud SQL settings into the ConfigMap,
 // and an external server CA into postgres-server-ca. The ConfigMap also
-// carries the actor JWT issuer and the snapshot bucket prefix.
+// carries the actor JWT issuer and the snapshot location.
 //
 // ate-api-server.yaml pulls both in through optional envFrom sources and
 // resolves the PostgreSQL connection, role, and schema flags from
@@ -53,7 +55,7 @@ const envHashAnnotation = "ate.dev/env-hash"
 // applies no Deployment.
 func (e *Env) CreateAPIServerEnvVars(ctx context.Context) error {
 	log.Step("create_api_server_env_vars")
-	bucketPrefix, err := snapshotBucketPrefix(e.Cfg.BucketName, e.Cfg.PreviewGates)
+	snapshotLocation, err := clusterSnapshotLocation(e.Cfg.SnapshotLocation, e.Cfg.PreviewGates)
 	if err != nil {
 		return err
 	}
@@ -134,8 +136,8 @@ func (e *Env) CreateAPIServerEnvVars(ctx context.Context) error {
 		configVars["ATE_API_POSTGRES_POOL_MAX_CONNS"] = poolMaxConns
 	}
 	configVars["ATE_API_ACTOR_JWT_ISSUER"] = e.Cfg.ActorJWTIssuer
-	if bucketPrefix != "" {
-		configVars["ATE_API_SNAPSHOT_BUCKET_PREFIX"] = bucketPrefix
+	if snapshotLocation != "" {
+		configVars["ATE_API_SNAPSHOT_LOCATION"] = snapshotLocation
 	}
 	if err := e.Kube.ApplyConfigMap(ctx, e.Namespace(), ConfigMapAPIEnvVars, configVars); err != nil {
 		return err
@@ -178,18 +180,24 @@ func sharedBootstrapOwnerWarning(enabled bool, bootstrapOwners, namespace string
 	return ""
 }
 
-// snapshotBucketPrefix is ate-api-server's --snapshot-bucket-prefix,
-// gs://<bucket>/. ate-api-server refuses to start without it unless the
-// SnapshotStorageLocation preview gate is enabled, so an empty bucket is an
-// error then.
-func snapshotBucketPrefix(bucket string, gates []string) (string, error) {
-	if bucket != "" {
-		return "gs://" + bucket + "/", nil
+// clusterSnapshotLocation validates location and returns it as ate-api-server's
+// --snapshot-location, the cluster-wide default storage location for actor
+// snapshots. It is used whether or not the SnapshotStorageLocation preview
+// gate is enabled; with the gate, an actor template's
+// snapshotConfig.storageLocation overrides it. It may be empty only when the
+// gate is enabled, in which case every template must set its own.
+func clusterSnapshotLocation(location string, gates []string) (string, error) {
+	if location != "" {
+		if err := resources.ValidateSnapshotLocation(location); err != nil {
+			return "", fmt.Errorf("invalid --snapshot-location: %w", err)
+		}
+		return location, nil
 	}
-	if previewGateEnabled(gates, preview.GateSnapshotStorageLocation) {
-		return "", nil
+	// Snapshot location should always be set by --snapshot-location flag when not using preview mode.
+	if !previewGateEnabled(gates, preview.GateSnapshotStorageLocation) {
+		return "", errors.New("--snapshot-location must be set if not using the preview mode")
 	}
-	return "", fmt.Errorf("BUCKET_NAME must be set: ate-api-server stores snapshots under gs://$BUCKET_NAME/ unless the %s preview gate is enabled", preview.GateSnapshotStorageLocation)
+	return "", nil
 }
 
 // previewGateEnabled reports whether gates, a --preview value, enables gate.

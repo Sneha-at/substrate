@@ -903,18 +903,18 @@ func runtimeAttribute(rt *ateapipb.SandboxRuntime, key string) string {
 
 // wantSnapshotLocation is where ate-api-server stores tmpl's snapshots: the
 // template's storageLocation with the SnapshotStorageLocation preview gate,
-// otherwise gs://$BUCKET_NAME/, the --snapshot-bucket-prefix ate-setup
-// installs it with.
+// otherwise $SNAPSHOT_LOCATION, the --snapshot-location ate-setup installs it
+// with.
 func wantSnapshotLocation(t *testing.T, tmpl *ateapipb.ActorTemplate) string {
 	t.Helper()
 	if location := tmpl.GetSnapshotConfig().GetStorageLocation(); location != "" && preview.IsEnabled(preview.GateSnapshotStorageLocation) {
 		return location
 	}
-	env, err := e2e.CheckEnv("BUCKET_NAME")
+	env, err := e2e.CheckEnv("SNAPSHOT_LOCATION")
 	if err != nil {
 		t.Fatalf("CheckEnv failed: %v", err)
 	}
-	return "gs://" + env["BUCKET_NAME"] + "/"
+	return env["SNAPSHOT_LOCATION"]
 }
 
 // assertSnapshotUnderLocation fails t unless snapshotURI is stored under

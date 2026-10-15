@@ -180,21 +180,21 @@ func tagDurableSnapshotURI(tag *ateapipb.Tag, storageStatus ateapipb.SnapshotSto
 // resolveSnapshotLocation returns the base object-storage URI actorTemplate's
 // snapshots are stored under: its snapshotConfig.storage_location when the
 // SnapshotStorageLocation preview gate is enabled and the field is set,
-// otherwise bucketPrefix, ate-api-server's --snapshot-bucket-prefix. It fails
-// with FailedPrecondition when neither applies.
+// otherwise snapshotLocation, ate-api-server's cluster-wide
+// --snapshot-location. It fails with FailedPrecondition when neither is set.
 //
 // It reads the process-wide gate rather than preview.IsEnabledFor, so a
 // request's preview opt-out cannot move where an actor's snapshots live.
-func resolveSnapshotLocation(bucketPrefix string, actorTemplate *ateapipb.ActorTemplate) (string, error) {
+func resolveSnapshotLocation(snapshotLocation string, actorTemplate *ateapipb.ActorTemplate) (string, error) {
 	if preview.IsEnabled(preview.GateSnapshotStorageLocation) {
 		if location := actorTemplate.GetSnapshotConfig().GetStorageLocation(); location != "" {
 			return location, nil
 		}
 	}
-	if bucketPrefix != "" {
-		return bucketPrefix, nil
+	if snapshotLocation != "" {
+		return snapshotLocation, nil
 	}
 	return "", apierror.FailedPrecondition(
-		"no snapshot storage location for actor template %s/%s: set ate-api-server's --snapshot-bucket-prefix, or enable the %q preview gate and set snapshotConfig.storageLocation",
-		actorTemplate.GetMetadata().GetAtespace(), actorTemplate.GetMetadata().GetName(), preview.GateSnapshotStorageLocation)
+		"actor template %s/%s has no snapshot storage location: set snapshotConfig.storageLocation, or set ate-api-server's --snapshot-location",
+		actorTemplate.GetMetadata().GetAtespace(), actorTemplate.GetMetadata().GetName())
 }

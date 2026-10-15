@@ -147,7 +147,11 @@ var Registry = []Setting{
 
 	{
 		Key: "storage.bucketName", Env: "BUCKET_NAME", Flag: "storage-bucket-name", Kind: KindString,
-		Usage: "Snapshot bucket the demos are templated with, and that ate-api-server stores snapshots under (required unless the SnapshotStorageLocation preview gate is enabled)",
+		Usage: "Snapshot bucket the demos are templated with",
+	},
+	{
+		Key: "storage.snapshotLocation", Env: "SNAPSHOT_LOCATION", Flag: "snapshot-location", Kind: KindString,
+		Usage: "Cluster-wide object-storage URI ate-api-server stores snapshots under, for example gs://BUCKET/PREFIX/ (required if the SnapshotStorageLocation preview gate is not enabled)",
 	},
 
 	{

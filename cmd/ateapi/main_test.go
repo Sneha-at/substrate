@@ -128,17 +128,17 @@ func TestLoadFlagsFromEnvActorJWTIssuer(t *testing.T) {
 	}
 }
 
-func TestLoadFlagsFromEnvSnapshotBucketPrefix(t *testing.T) {
-	old := *snapshotBucketPrefix
-	t.Cleanup(func() { *snapshotBucketPrefix = old })
-	*snapshotBucketPrefix = "@env"
-	t.Setenv("ATE_API_SNAPSHOT_BUCKET_PREFIX", "gs://ate-snapshots/")
+func TestLoadFlagsFromEnvSnapshotLocation(t *testing.T) {
+	old := *snapshotLocation
+	t.Cleanup(func() { *snapshotLocation = old })
+	*snapshotLocation = "@env"
+	t.Setenv("ATE_API_SNAPSHOT_LOCATION", "gs://ate-snapshots/prefix/")
 
 	if err := loadFlagsFromEnv(); err != nil {
 		t.Fatal(err)
 	}
-	if *snapshotBucketPrefix != "gs://ate-snapshots/" {
-		t.Errorf("--snapshot-bucket-prefix = %q, want %q", *snapshotBucketPrefix, "gs://ate-snapshots/")
+	if *snapshotLocation != "gs://ate-snapshots/prefix/" {
+		t.Errorf("--snapshot-location = %q, want %q", *snapshotLocation, "gs://ate-snapshots/prefix/")
 	}
 }
 

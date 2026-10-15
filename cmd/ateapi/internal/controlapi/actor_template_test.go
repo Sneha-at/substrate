@@ -152,39 +152,43 @@ func TestCreateActorTemplate(t *testing.T) {
 
 // TestCreateActorTemplate_RequiresSnapshotLocation pins that create rejects,
 // with FailedPrecondition, a template whose actors would have no snapshot
-// location: neither an honored storageLocation nor --snapshot-bucket-prefix.
+// location: neither an honored storageLocation nor --snapshot-location.
 func TestCreateActorTemplate_RequiresSnapshotLocation(t *testing.T) {
 	tests := []struct {
-		name     string
-		gates    []string
-		optOut   bool
-		prefix   string
-		location string
-		wantCode codes.Code
+		name                    string
+		gates                   []string
+		optOut                  bool
+		clusterSnapshotLocation string
+		location                string
+		wantCode                codes.Code
 	}{{
-		name:     "gate off, prefix set",
-		prefix:   "gs://prefix-bucket/",
-		location: "gs://my-bucket/snapshots",
-		wantCode: codes.OK,
+		name:                    "gate off, cluster location set",
+		clusterSnapshotLocation: "gs://cluster-bucket/",
+		location:                "gs://my-bucket/snapshots",
+		wantCode:                codes.OK,
 	}, {
-		name:     "gate off, no prefix",
+		name:     "gate off, no cluster location",
 		location: "gs://my-bucket/snapshots",
 		wantCode: codes.FailedPrecondition,
 	}, {
-		name:     "gate on, location set, no prefix",
+		name:     "gate on, location set, no cluster location",
 		gates:    []string{"SnapshotStorageLocation"},
 		location: "gs://my-bucket/snapshots",
 		wantCode: codes.OK,
 	}, {
-		name:     "gate on, opted out, no location, prefix set",
-		gates:    []string{"SnapshotStorageLocation"},
-		optOut:   true,
-		prefix:   "gs://prefix-bucket/",
-		wantCode: codes.OK,
+		name:                    "gate on, no location, cluster location set",
+		gates:                   []string{"SnapshotStorageLocation"},
+		clusterSnapshotLocation: "gs://cluster-bucket/",
+		wantCode:                codes.OK,
 	}, {
-		name:     "gate on, opted out, no location, no prefix",
+		name:                    "gate on, opted out, no location, cluster location set",
+		gates:                   []string{"SnapshotStorageLocation"},
+		optOut:                  true,
+		clusterSnapshotLocation: "gs://cluster-bucket/",
+		wantCode:                codes.OK,
+	}, {
+		name:     "gate on, no location, no cluster location",
 		gates:    []string{"SnapshotStorageLocation"},
-		optOut:   true,
 		wantCode: codes.FailedPrecondition,
 	}}
 	for i, tt := range tests {
@@ -192,7 +196,7 @@ func TestCreateActorTemplate_RequiresSnapshotLocation(t *testing.T) {
 			preview.InitForTest(t, tt.gates...)
 			persistence := newTestPersistence(t)
 			impl := newServiceImpl(persistence, nil)
-			impl.snapshotBucketPrefix = tt.prefix
+			impl.clusterSnapshotLocation = tt.clusterSnapshotLocation
 			s := &RPCService{impl: impl, sandboxConfigLister: gvisorDefaultLister(t)}
 			ctx := context.Background()
 			if _, err := persistence.CreateAtespace(ctx, &ateapipb.Atespace{Metadata: &ateapipb.ResourceMetadata{Name: "ns1"}}); err != nil {
