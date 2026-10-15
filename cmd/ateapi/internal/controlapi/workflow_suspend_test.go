@@ -697,7 +697,7 @@ func TestSuspendActor_Finalized_PauseReleasesReplacedSnapshot(t *testing.T) {
 }
 
 // TestSnapshotLocationChange_LeavesNothingBehind verifies that moving an
-// actor's snapshot location, by changing --snapshot-bucket-prefix, toggling
+// actor's snapshot location, by changing --snapshot-location, toggling
 // the SnapshotStorageLocation preview gate, or repointing the actor, strands
 // nothing: the next suspend releases the replaced snapshot under its own
 // location, and deleting the actor then collects the new one.

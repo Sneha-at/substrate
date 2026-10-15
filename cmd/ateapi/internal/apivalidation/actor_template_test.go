@@ -239,7 +239,6 @@ func TestValidateCreateActorTemplateRequest_SnapshotStorageLocationOptIn(t *test
 		name:   "gate on, opted in, no location",
 		gates:  "SnapshotStorageLocation",
 		mutate: withoutLocation,
-		want:   field.ErrorList{field.Required(storageLocation, "")},
 	}}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -426,13 +425,9 @@ func TestValidateActorTemplate(t *testing.T) {
 	}, {
 		name:   "missing storage_location",
 		mutate: func(tmpl *ateapipb.ActorTemplate) { tmpl.SnapshotConfig.StorageLocation = "" },
-		// Without the gate the field is ignored in favor of
-		// --snapshot-bucket-prefix, so it may be empty.
+		// Optional with or without the gate: an empty field falls back to
+		// --snapshot-location.
 		want: nil,
-		wantWithPreview: map[string]field.ErrorList{
-			"SnapshotStorageLocation": {field.Required(field.NewPath("snapshot_config", "storage_location"), "")},
-			preview.All:               {field.Required(field.NewPath("snapshot_config", "storage_location"), "")},
-		},
 	}, {
 		name: "unspecified snapshot scope",
 		mutate: func(tmpl *ateapipb.ActorTemplate) {

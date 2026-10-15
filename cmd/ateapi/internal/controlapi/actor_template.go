@@ -72,7 +72,7 @@ func (s *ServiceImpl) CreateActorTemplate(ctx context.Context, inTemplate *ateap
 
 	// Reject a template whose actors could never be snapshotted, rather than
 	// failing their first suspend or tag.
-	if _, err := resolveSnapshotLocation(s.snapshotBucketPrefix, outTemplate); err != nil {
+	if _, err := resolveSnapshotLocation(s.clusterSnapshotLocation, outTemplate); err != nil {
 		return nil, err
 	}
 

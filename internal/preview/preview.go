@@ -44,7 +44,7 @@ const (
 
 	// GateSnapshotStorageLocation controls whether an ActorTemplate's
 	// snapshotConfig.storage_location is honored. When disabled, snapshots
-	// are stored under ate-api-server's --snapshot-bucket-prefix.
+	// are stored under ate-api-server's --snapshot-location.
 	GateSnapshotStorageLocation Gate = "SnapshotStorageLocation"
 )
 

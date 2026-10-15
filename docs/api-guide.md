@@ -343,9 +343,9 @@ snapshotConfig:
 ```
 
 > [!NOTE]
-> `snapshotConfig.storageLocation` is a preview field: it is required and honored only when ate-api-server runs with the `SnapshotStorageLocation` preview gate (`--preview=SnapshotStorageLocation`). Without the gate, the field is ignored and every snapshot is stored under ate-api-server's `--snapshot-bucket-prefix`, which is then required. With the gate, `--snapshot-bucket-prefix` is optional and serves only as a fallback. `<location>` above is whichever of the two applies.
+> Snapshots are stored under ate-api-server's cluster-wide `--snapshot-location`. `snapshotConfig.storageLocation` is an optional preview field: with the `SnapshotStorageLocation` preview gate (`--preview=SnapshotStorageLocation`), a template that sets it stores its snapshots there instead. Without the gate, the field is ignored. `<location>` above is whichever of the two applies.
 >
-> With the gate enabled, only a client that opts in to preview features (`kubectl ate --preview`, or the `Ate-Preview-Allowed: true` header) may set `storageLocation`, and such a client must set it. A client that does not opt in must leave it empty, and its templates use `--snapshot-bucket-prefix`. `CreateActorTemplate` fails with `FailedPrecondition` when neither location applies.
+> With the gate enabled, only a client that opts in to preview features (`kubectl ate --preview`, or the `Ate-Preview-Allowed: true` header) may set `storageLocation`. `CreateActorTemplate` fails with `FailedPrecondition` when the template leaves it empty and ate-api-server has no `--snapshot-location`.
 >
 > Changing the flag or toggling the gate moves `<location>` for every template it affects. Snapshots already taken stay where they are and can still be resumed from. An actor's next suspend writes under the new location and releases its previous snapshot from the old one. Until then, the actor cannot change its `actor_template` (see `UpdateActor` below), and deleting it collects its prefix under the old location. If that release fails, the previous snapshot's objects stay under the old location, and deleting the actor later does not collect them.
 
@@ -612,7 +612,7 @@ Registers a new logical actor in the system.
 Replaces the mutable fields of an existing actor with the ones in the request.
 *   **Request:** `UpdateActorRequest`
     *   `actor`: `Actor` — the complete replacement actor. `metadata.atespace` and `metadata.name` identify the resource; `metadata.uid` and `metadata.version` are **required** preconditions. `metadata` and `status` are server-owned and whatever the request carries in them is ignored. `source_tag` is immutable.
-    *   `actor_template` may change only while the actor is `SUSPENDED`. The new template must declare the same volumes and volume mounts. Once the actor owns an external snapshot, the new template must also store snapshots under the same location: its `snapshotConfig.storageLocation` with the `SnapshotStorageLocation` preview gate, otherwise ate-api-server's `--snapshot-bucket-prefix` (see [Snapshot Storage Layout](#snapshot-storage-layout)).
+    *   `actor_template` may change only while the actor is `SUSPENDED`. The new template must declare the same volumes and volume mounts. Once the actor owns an external snapshot, the new template must also store snapshots under the same location: its `snapshotConfig.storageLocation` with the `SnapshotStorageLocation` preview gate, otherwise ate-api-server's `--snapshot-location` (see [Snapshot Storage Layout](#snapshot-storage-layout)).
 *   **Response:** the updated `Actor`.
 *   **Errors:** `INVALID_ARGUMENT` if `uid` or `version` is unset, or if the request changes an immutable field — including by leaving one unset; `FAILED_PRECONDITION` if a change to `actor_template` breaks one of the rules above; `ABORTED` if either guard no longer matches the stored resource.
 

@@ -208,8 +208,7 @@ See
 | `deploy demo claude-code-multiplex` | `--deploy-demo-claude-code-multiplex` | Several Claude Code agents multiplexed onto one WorkerPool (requires `ANTHROPIC_API_KEY`, `BUCKET_NAME`, `KO_DOCKER_REPO`) |
 
 Each has a matching `delete demo NAME` / `--delete-demo-NAME`. Demo flags bind
-to the deploy side only; teardown never reads them. Every demo stores its
-snapshots in `BUCKET_NAME`, and deploying one fails without it.
+to the deploy side only; teardown never reads them.
 
 The demo list is not hard-coded here — it is built from the registry in
 [`internal/demos`](internal/demos), one package per demo, so

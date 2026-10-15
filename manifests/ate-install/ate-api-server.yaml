@@ -188,7 +188,7 @@ spec:
           - --drain-delay=13s
           - --drain-timeout=15s
           - --objectstore-plugin-socket=/run/objectstore-plugin/control.sock
-          - --snapshot-bucket-prefix=@env
+          - --snapshot-location=@env
         env:
         - name: POD_NAME
           valueFrom:

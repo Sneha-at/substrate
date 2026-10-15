@@ -413,7 +413,7 @@ func (s *ServiceImpl) validateSnapshotLocationUnchanged(actor *ateapipb.Actor, n
 	}
 	// Compared as prefixes, so a newLocation spelled with and without a
 	// trailing slash counts as the same.
-	newLocation, err := resolveSnapshotLocation(s.snapshotBucketPrefix, newTemplate)
+	newLocation, err := resolveSnapshotLocation(s.clusterSnapshotLocation, newTemplate)
 	if err != nil {
 		return err
 	}

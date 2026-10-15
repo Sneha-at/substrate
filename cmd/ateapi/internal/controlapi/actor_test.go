@@ -413,7 +413,7 @@ func TestUpdateActor_RepointTemplate(t *testing.T) {
 // still collects everything it wrote. Stored data the check cannot parse is a
 // server fault: the error carries no status, which ServerUnaryInterceptor
 // answers with INTERNAL. With the SnapshotStorageLocation preview gate off,
-// every template resolves to --snapshot-bucket-prefix, so template locations
+// every template resolves to --snapshot-location, so template locations
 // cannot block a repoint.
 func TestUpdateActor_RepointTemplateStorageLocation(t *testing.T) {
 	ctx := context.Background()
@@ -468,10 +468,10 @@ func TestUpdateActor_RepointTemplateStorageLocation(t *testing.T) {
 		snapshot  func(*testing.T, *ateapipb.Actor) string
 		repointTo string
 		// gateOff disables the SnapshotStorageLocation preview gate, so
-		// every template resolves to bucketPrefix.
-		gateOff      bool
-		bucketPrefix string
-		wantCode     codes.Code
+		// every template resolves to clusterSnapshotLocation.
+		gateOff                 bool
+		clusterSnapshotLocation string
+		wantCode                codes.Code
 	}{
 		{
 			name:      "no external snapshot moves freely",
@@ -522,25 +522,25 @@ func TestUpdateActor_RepointTemplateStorageLocation(t *testing.T) {
 			wantCode:  codes.Internal,
 		},
 		{
-			name:         "gate off: owned snapshot moves between template locations, which are ignored",
-			template:     "same-location",
-			snapshot:     snapshotOwnedByActor,
-			repointTo:    "different-location",
-			gateOff:      true,
-			bucketPrefix: sameLocation,
-			wantCode:     codes.OK,
+			name:                    "gate off: owned snapshot moves between template locations, which are ignored",
+			template:                "same-location",
+			snapshot:                snapshotOwnedByActor,
+			repointTo:               "different-location",
+			gateOff:                 true,
+			clusterSnapshotLocation: sameLocation,
+			wantCode:                codes.OK,
 		},
 		{
-			name:         "gate off: an invalid template location is ignored",
-			template:     "same-location",
-			snapshot:     snapshotOwnedByActor,
-			repointTo:    "corrupt",
-			gateOff:      true,
-			bucketPrefix: sameLocation,
-			wantCode:     codes.OK,
+			name:                    "gate off: an invalid template location is ignored",
+			template:                "same-location",
+			snapshot:                snapshotOwnedByActor,
+			repointTo:               "corrupt",
+			gateOff:                 true,
+			clusterSnapshotLocation: sameLocation,
+			wantCode:                codes.OK,
 		},
 		{
-			name:      "gate off without --snapshot-bucket-prefix has no location to check",
+			name:      "gate off without --snapshot-location has no location to check",
 			template:  "same-location",
 			snapshot:  snapshotOwnedByActor,
 			repointTo: "different-location",
@@ -554,7 +554,7 @@ func TestUpdateActor_RepointTemplateStorageLocation(t *testing.T) {
 				preview.InitForTest(t)
 			}
 			impl := newServiceImpl(persistence, nil)
-			impl.snapshotBucketPrefix = tt.bucketPrefix
+			impl.clusterSnapshotLocation = tt.clusterSnapshotLocation
 			svc := &RPCService{impl: impl}
 			actor := storetest.MustCreateActor(t, ctx, persistence, &ateapipb.Actor{
 				Metadata:      &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: fmt.Sprintf("actor-%d", i)},

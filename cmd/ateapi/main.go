@@ -110,7 +110,7 @@ var (
 	drainTimeout = pflag.Duration("drain-timeout", 15*time.Second, "Deadline for the graceful gRPC drain on shutdown. In-flight RPCs still running past it are forcefully cancelled.")
 
 	objectStorePluginSocket = pflag.String("objectstore-plugin-socket", "/run/objectstore-plugin/control.sock", "Unix socket of the control object-store plugin that external snapshots are deleted and copied through.")
-	snapshotBucketPrefix    = pflag.String("snapshot-bucket-prefix", "", "Base object-storage URI (for example gs://BUCKET/PREFIX/) that actor snapshots are stored under. Required unless the SnapshotStorageLocation preview gate is enabled, in which case an actor template's snapshotConfig.storageLocation takes precedence.")
+	snapshotLocation        = pflag.String("snapshot-location", "", "Base object-storage URI (for example gs://BUCKET/PREFIX/) that actor snapshots are stored under. Required unless the SnapshotStorageLocation preview gate is enabled; with the gate, an actor template's snapshotConfig.storageLocation overrides it.")
 
 	templateResyncInterval = pflag.Duration("template-resync-interval", 20*time.Second, fmt.Sprintf("Interval between actor template resyncs. Must be at least %s.", minResyncInterval))
 
@@ -168,12 +168,12 @@ func main() {
 	if errs := resources.ValidateHostPort(field.NewPath("default-egress-gateway-address"), *defaultEgressGatewayAddress); len(errs) > 0 {
 		serverboot.Fatal(ctx, "Invalid --default-egress-gateway-address", errs.ToAggregate())
 	}
-	if *snapshotBucketPrefix != "" {
-		if err := resources.ValidateSnapshotLocation(*snapshotBucketPrefix); err != nil {
-			serverboot.Fatal(ctx, "Invalid --snapshot-bucket-prefix", err)
+	if *snapshotLocation != "" {
+		if err := resources.ValidateSnapshotLocation(*snapshotLocation); err != nil {
+			serverboot.Fatal(ctx, "Invalid --snapshot-location", err)
 		}
 	} else if !preview.IsEnabled(preview.GateSnapshotStorageLocation) {
-		serverboot.Fatal(ctx, "Missing --snapshot-bucket-prefix", fmt.Errorf("required unless the %s preview gate is enabled", preview.GateSnapshotStorageLocation))
+		serverboot.Fatal(ctx, "Missing --snapshot-location", fmt.Errorf("required unless the %s preview gate is enabled", preview.GateSnapshotStorageLocation))
 	}
 
 	// Kept separate from ctx so that in-progress work (clients, informers) is
@@ -357,7 +357,7 @@ func main() {
 		*actorJWTIssuer,
 		actorIDJWTAuthorityPool,
 		actorIDCAPool,
-		*snapshotBucketPrefix,
+		*snapshotLocation,
 	)
 
 	// Drive stored ActorTemplates through the golden actor flow.
@@ -464,7 +464,7 @@ func loadFlagsFromEnv() error {
 		{postgresOwnerRole, "ATE_API_POSTGRES_OWNER_ROLE"},
 		{postgresSchema, "ATE_API_POSTGRES_SCHEMA"},
 		{actorJWTIssuer, "ATE_API_ACTOR_JWT_ISSUER"},
-		{snapshotBucketPrefix, "ATE_API_SNAPSHOT_BUCKET_PREFIX"},
+		{snapshotLocation, "ATE_API_SNAPSHOT_LOCATION"},
 	}
 	for _, o := range overrides {
 		if *o.flag == "@env" {
@@ -516,7 +516,7 @@ func logFlagValues(ctx context.Context) {
 		slog.String("atelet-client-cred-bundle", *ateletClientCredBundle),
 		slog.Duration("drain-delay", *drainDelay),
 		slog.Duration("drain-timeout", *drainTimeout),
-		slog.String("snapshot-bucket-prefix", *snapshotBucketPrefix),
+		slog.String("snapshot-location", *snapshotLocation),
 		slog.Any("preview", *previewFlags),
 	)
 }

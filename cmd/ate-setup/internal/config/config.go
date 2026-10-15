@@ -137,9 +137,12 @@ type Config struct {
 	// defaults to the in-cluster URL of the install's ate-idp-server Service.
 	ActorJWTIssuer string
 
-	// BucketName is the snapshot bucket demos are templated with, and that
-	// ate-api-server's --snapshot-bucket-prefix points at.
+	// BucketName is the snapshot bucket demos are templated with.
 	BucketName string
+
+	// SnapshotLocation is ate-api-server's --snapshot-location
+	// (SNAPSHOT_LOCATION).
+	SnapshotLocation string
 
 	// KODockerRepo is where ko pushes images (KO_DOCKER_REPO).
 	KODockerRepo string
@@ -429,6 +432,7 @@ func (c *Config) ScriptEnv() []string {
 		"KUBECTL_CONTEXT":     c.Context,
 		"KUBECONFIG":          c.kubeconfigEnv,
 		"BUCKET_NAME":         c.BucketName,
+		"SNAPSHOT_LOCATION":   c.SnapshotLocation,
 		"KO_DOCKER_REPO":      c.KODockerRepo,
 		"KO_DEFAULTPLATFORMS": c.KODefaultPlatforms,
 		"PROJECT_ID":          c.ProjectID,
