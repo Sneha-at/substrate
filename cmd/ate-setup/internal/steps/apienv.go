@@ -18,7 +18,6 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
-	"errors"
 	"fmt"
 	"maps"
 	"os"
@@ -182,7 +181,7 @@ func sharedBootstrapOwnerWarning(enabled bool, bootstrapOwners, namespace string
 
 // clusterSnapshotLocation validates location and returns it as ate-api-server's
 // --snapshot-location, the cluster-wide default storage location for actor
-// snapshots. It is used whether or not the SnapshotStorageLocation preview
+// snapshots. It is used whether or not the PerTemplateSnapshotLocation preview
 // gate is enabled; with the gate, an actor template's
 // snapshotConfig.storageLocation overrides it. It may be empty only when the
 // gate is enabled, in which case every template must set its own.
@@ -194,8 +193,8 @@ func clusterSnapshotLocation(location string, gates []string) (string, error) {
 		return location, nil
 	}
 	// Snapshot location should always be set by --snapshot-location flag when not using preview mode.
-	if !previewGateEnabled(gates, preview.GateSnapshotStorageLocation) {
-		return "", errors.New("--snapshot-location must be set if not using the preview mode")
+	if !previewGateEnabled(gates, preview.GatePerTemplateSnapshotLocation) {
+		return "", fmt.Errorf("--snapshot-location (SNAPSHOT_LOCATION) must be set unless --preview=%s is enabled", preview.GatePerTemplateSnapshotLocation)
 	}
 	return "", nil
 }

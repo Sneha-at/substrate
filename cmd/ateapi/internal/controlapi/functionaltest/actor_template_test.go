@@ -420,13 +420,13 @@ func TestCreateActorTemplate_ExternalVolumesPreview(t *testing.T) {
 	}
 }
 
-// TestCreateActorTemplate_SnapshotStorageLocationPreview pins how
-// snapshotConfig.storageLocation combines the SnapshotStorageLocation gate
+// TestCreateActorTemplate_PerTemplateSnapshotLocationPreview pins how
+// snapshotConfig.storageLocation combines the PerTemplateSnapshotLocation gate
 // with the client's preview opt-in. With the gate off the field is ignored,
 // so any client may set it. With the gate on, only a client that opts in may
 // set it; a template that leaves it empty uses the server's
 // --snapshot-location.
-func TestCreateActorTemplate_SnapshotStorageLocationPreview(t *testing.T) {
+func TestCreateActorTemplate_PerTemplateSnapshotLocationPreview(t *testing.T) {
 	ns := namespaceForTest("ns-template-storage-location-preview")
 	tc := setupTest(t, ns)
 	defer tc.cleanup()
@@ -440,10 +440,10 @@ func TestCreateActorTemplate_SnapshotStorageLocationPreview(t *testing.T) {
 	}{
 		{name: "gate off, no opt-in, location set", optIn: false, location: "gs://my-bucket/snapshots", wantCode: codes.OK},
 		{name: "gate off, opt-in, location set", optIn: true, location: "gs://my-bucket/snapshots", wantCode: codes.OK},
-		{name: "gate on, no opt-in, location set", gates: []string{"SnapshotStorageLocation"}, optIn: false, location: "gs://my-bucket/snapshots", wantCode: codes.InvalidArgument},
-		{name: "gate on, no opt-in, no location", gates: []string{"SnapshotStorageLocation"}, optIn: false, wantCode: codes.OK},
-		{name: "gate on, opt-in, location set", gates: []string{"SnapshotStorageLocation"}, optIn: true, location: "gs://my-bucket/snapshots", wantCode: codes.OK},
-		{name: "gate on, opt-in, no location", gates: []string{"SnapshotStorageLocation"}, optIn: true, wantCode: codes.OK},
+		{name: "gate on, no opt-in, location set", gates: []string{"PerTemplateSnapshotLocation"}, optIn: false, location: "gs://my-bucket/snapshots", wantCode: codes.InvalidArgument},
+		{name: "gate on, no opt-in, no location", gates: []string{"PerTemplateSnapshotLocation"}, optIn: false, wantCode: codes.OK},
+		{name: "gate on, opt-in, location set", gates: []string{"PerTemplateSnapshotLocation"}, optIn: true, location: "gs://my-bucket/snapshots", wantCode: codes.OK},
+		{name: "gate on, opt-in, no location", gates: []string{"PerTemplateSnapshotLocation"}, optIn: true, wantCode: codes.OK},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			preview.InitForTest(t, tt.gates...)

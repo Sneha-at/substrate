@@ -141,7 +141,10 @@ type Config struct {
 	BucketName string
 
 	// SnapshotLocation is ate-api-server's --snapshot-location
-	// (SNAPSHOT_LOCATION).
+	// (SNAPSHOT_LOCATION): the cluster-wide object-storage URI actor snapshots
+	// are stored under. Required unless the PerTemplateSnapshotLocation
+	// preview gate is enabled, which also lets a
+	// template's snapshotConfig.storageLocation override it.
 	SnapshotLocation string
 
 	// KODockerRepo is where ko pushes images (KO_DOCKER_REPO).

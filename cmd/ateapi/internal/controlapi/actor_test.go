@@ -412,7 +412,7 @@ func TestUpdateActor_RepointTemplate(t *testing.T) {
 // a template storing snapshots under the same location, so deleting the actor
 // still collects everything it wrote. Stored data the check cannot parse is a
 // server fault: the error carries no status, which ServerUnaryInterceptor
-// answers with INTERNAL. With the SnapshotStorageLocation preview gate off,
+// answers with INTERNAL. With the PerTemplateSnapshotLocation preview gate off,
 // every template resolves to --snapshot-location, so template locations
 // cannot block a repoint.
 func TestUpdateActor_RepointTemplateStorageLocation(t *testing.T) {
@@ -467,7 +467,7 @@ func TestUpdateActor_RepointTemplateStorageLocation(t *testing.T) {
 		template  string
 		snapshot  func(*testing.T, *ateapipb.Actor) string
 		repointTo string
-		// gateOff disables the SnapshotStorageLocation preview gate, so
+		// gateOff disables the PerTemplateSnapshotLocation preview gate, so
 		// every template resolves to clusterSnapshotLocation.
 		gateOff                 bool
 		clusterSnapshotLocation string

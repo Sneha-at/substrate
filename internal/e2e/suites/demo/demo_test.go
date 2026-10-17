@@ -814,12 +814,12 @@ func runtimeAttribute(rt *ateapipb.SandboxRuntime, key string) string {
 }
 
 // wantSnapshotLocation is where ate-api-server stores tmpl's snapshots: the
-// template's storageLocation with the SnapshotStorageLocation preview gate,
+// template's storageLocation with the PerTemplateSnapshotLocation preview gate,
 // otherwise $SNAPSHOT_LOCATION, the --snapshot-location ate-setup installs it
 // with.
 func wantSnapshotLocation(t *testing.T, tmpl *ateapipb.ActorTemplate) string {
 	t.Helper()
-	if location := tmpl.GetSnapshotConfig().GetStorageLocation(); location != "" && preview.IsEnabled(preview.GateSnapshotStorageLocation) {
+	if location := tmpl.GetSnapshotConfig().GetStorageLocation(); location != "" && preview.IsEnabled(preview.GatePerTemplateSnapshotLocation) {
 		return location
 	}
 	env, err := e2e.CheckEnv("SNAPSHOT_LOCATION")
@@ -843,8 +843,8 @@ func assertSnapshotUnderLocation(t *testing.T, snapshotURI, location string) {
 		t.Fatalf("snapshot owner prefix under %q: %v", location, err)
 	}
 	if got := uri.OwnerPrefix(); got != want {
-		t.Errorf("snapshot %q is stored under %q, want %q (SnapshotStorageLocation preview gate enabled: %t)",
-			snapshotURI, got, want, preview.IsEnabled(preview.GateSnapshotStorageLocation))
+		t.Errorf("snapshot %q is stored under %q, want %q (PerTemplateSnapshotLocation preview gate enabled: %t)",
+			snapshotURI, got, want, preview.IsEnabled(preview.GatePerTemplateSnapshotLocation))
 	}
 }
 

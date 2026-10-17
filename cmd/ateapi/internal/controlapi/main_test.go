@@ -27,7 +27,7 @@ func TestMain(m *testing.M) {
 	// Most tests store snapshots under their template's storageLocation, which
 	// is honored only with this gate. Tests that need it off call
 	// preview.InitForTest.
-	if err := preview.Init(string(preview.GateSnapshotStorageLocation)); err != nil {
+	if err := preview.Init(string(preview.GatePerTemplateSnapshotLocation)); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}

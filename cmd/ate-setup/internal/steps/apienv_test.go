@@ -772,18 +772,18 @@ func TestCreateAPIServerEnvVarsSnapshotLocation(t *testing.T) {
 	}, {
 		name:     "set with the gate on",
 		location: "gs://ate-snapshots/prefix/",
-		gates:    []string{"SnapshotStorageLocation"},
+		gates:    []string{"PerTemplateSnapshotLocation"},
 		want:     "gs://ate-snapshots/prefix/",
 	}, {
 		name:  "unset when the gate is on",
-		gates: []string{"SnapshotStorageLocation"},
+		gates: []string{"PerTemplateSnapshotLocation"},
 	}, {
 		name:  "unset when every gate is on",
 		gates: []string{"ALL"},
 	}, {
 		name:    "an error when unset and the gate is off",
 		gates:   []string{"ExternalVolumes"},
-		wantErr: "--snapshot-location must be set if not using the preview mode",
+		wantErr: "--snapshot-location (SNAPSHOT_LOCATION) must be set unless --preview=PerTemplateSnapshotLocation is enabled",
 	}, {
 		name:     "an error when invalid",
 		location: "gs:///no-bucket",

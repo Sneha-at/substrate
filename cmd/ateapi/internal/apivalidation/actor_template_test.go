@@ -119,11 +119,11 @@ func TestValidateCreateActorTemplateRequest(t *testing.T) {
 		})},
 		field.ErrorList{field.Invalid(field.NewPath("actor_template", "containers").Index(0).Child("volume_mounts").Index(0).Child("name"), "ghost-vol", "")},
 	}, {
-		"missing snapshot_config",
+		"missing snapshot_config is allowed",
 		&ateapipb.CreateActorTemplateRequest{ActorTemplate: validActorTemplate(func(tmpl *ateapipb.ActorTemplate) {
 			tmpl.SnapshotConfig = nil
 		})},
-		field.ErrorList{field.Required(field.NewPath("actor_template", "snapshot_config"), "")},
+		nil,
 	}, {
 		"snapshot_config.storage_location is not needed when the preview gate is off",
 		&ateapipb.CreateActorTemplateRequest{ActorTemplate: validActorTemplate(func(tmpl *ateapipb.ActorTemplate) {
@@ -206,7 +206,7 @@ func TestValidateCreateActorTemplateRequest_PreviewRestricted(t *testing.T) {
 	})
 }
 
-func TestValidateCreateActorTemplateRequest_SnapshotStorageLocationOptIn(t *testing.T) {
+func TestValidateCreateActorTemplateRequest_PerTemplateSnapshotLocationOptIn(t *testing.T) {
 	storageLocation := field.NewPath("actor_template", "snapshot_config", "storage_location")
 	withoutLocation := func(tmpl *ateapipb.ActorTemplate) { tmpl.SnapshotConfig.StorageLocation = "" }
 	tests := []struct {
@@ -224,20 +224,20 @@ func TestValidateCreateActorTemplateRequest_SnapshotStorageLocationOptIn(t *test
 		mutate: withoutLocation,
 	}, {
 		name:   "gate on, opted out, location set",
-		gates:  "SnapshotStorageLocation",
+		gates:  "PerTemplateSnapshotLocation",
 		optOut: true,
 		want:   field.ErrorList{field.Forbidden(storageLocation, "")},
 	}, {
 		name:   "gate on, opted out, no location",
-		gates:  "SnapshotStorageLocation",
+		gates:  "PerTemplateSnapshotLocation",
 		optOut: true,
 		mutate: withoutLocation,
 	}, {
 		name:  "gate on, opted in, location set",
-		gates: "SnapshotStorageLocation",
+		gates: "PerTemplateSnapshotLocation",
 	}, {
 		name:   "gate on, opted in, no location",
-		gates:  "SnapshotStorageLocation",
+		gates:  "PerTemplateSnapshotLocation",
 		mutate: withoutLocation,
 	}}
 	for _, tt := range tests {
@@ -413,9 +413,9 @@ func TestValidateActorTemplate(t *testing.T) {
 		},
 		want: field.ErrorList{field.Invalid(field.NewPath("worker_selector", "match_labels").Key("tier"), nil, "").WithOrigin("format=k8s-label-value")},
 	}, {
-		name:   "missing snapshot_config",
+		name:   "missing snapshot_config is allowed",
 		mutate: func(tmpl *ateapipb.ActorTemplate) { tmpl.SnapshotConfig = nil },
-		want:   field.ErrorList{field.Required(field.NewPath("snapshot_config"), "")},
+		want:   nil,
 	}, {
 		name: "storage_location too long",
 		mutate: func(tmpl *ateapipb.ActorTemplate) {

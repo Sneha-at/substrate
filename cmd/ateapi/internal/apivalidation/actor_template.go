@@ -178,15 +178,15 @@ func ValidateCustom_ExternalVolumeTemplate_Capacity(_ context.Context, _ operati
 // ActorTemplate's snapshotConfig.location is a well-formed
 // URI with a bucket, so a bad location fails fast.
 //
-// The field is ignored while the SnapshotStorageLocation gate is off, so a
+// The field is ignored while the PerTemplateSnapshotLocation gate is off, so a
 // declarative ifDisabled=forbidden would reject the templates that set it
 // on servers without the gate. Instead, with the gate on, a request that
 // did not opt in to preview features is forbidden from setting it.
 func ValidateCustom_SnapshotConfig_StorageLocation(ctx context.Context, _ operation.Operation, fldPath *field.Path, value, _ *string) field.ErrorList {
-	if preview.IsEnabled(preview.GateSnapshotStorageLocation) && preview.IsOptedOut(ctx) {
+	if preview.IsEnabled(preview.GatePerTemplateSnapshotLocation) && preview.IsOptedOut(ctx) {
 		return field.ErrorList{field.Forbidden(fldPath, fmt.Sprintf(
 			"requires a client that opts in to preview features (kubectl ate --preview, or the %s header) while the %s preview gate is enabled",
-			preview.Header, preview.GateSnapshotStorageLocation))}
+			preview.Header, preview.GatePerTemplateSnapshotLocation))}
 	}
 	if err := resources.ValidateSnapshotLocation(*value); err != nil {
 		return field.ErrorList{field.Invalid(fldPath, *value, err.Error())}

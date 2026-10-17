@@ -154,14 +154,14 @@ func tagDurableSnapshotURI(tag *ateapipb.Tag, storageStatus ateapipb.SnapshotSto
 
 // resolveSnapshotLocation returns the base object-storage URI actorTemplate's
 // snapshots are stored under: its snapshotConfig.storage_location when the
-// SnapshotStorageLocation preview gate is enabled and the field is set,
+// PerTemplateSnapshotLocation preview gate is enabled and the field is set,
 // otherwise snapshotLocation, ate-api-server's cluster-wide
 // --snapshot-location. It fails with FailedPrecondition when neither is set.
 //
 // It reads the process-wide gate rather than preview.IsEnabledFor, so a
 // request's preview opt-out cannot move where an actor's snapshots live.
 func resolveSnapshotLocation(snapshotLocation string, actorTemplate *ateapipb.ActorTemplate) (string, error) {
-	if preview.IsEnabled(preview.GateSnapshotStorageLocation) {
+	if preview.IsEnabled(preview.GatePerTemplateSnapshotLocation) {
 		if location := actorTemplate.GetSnapshotConfig().GetStorageLocation(); location != "" {
 			return location, nil
 		}
