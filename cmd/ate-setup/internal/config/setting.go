@@ -151,7 +151,7 @@ var Registry = []Setting{
 	},
 	{
 		Key: "storage.snapshotLocation", Env: "SNAPSHOT_LOCATION", Flag: "snapshot-location", Kind: KindString,
-		Usage: "Cluster-wide object-storage URI ate-api-server stores snapshots under, for example gs://BUCKET/PREFIX/ (required if the SnapshotStorageLocation preview gate is not enabled)",
+		Usage: "Cluster-wide object-storage URI ate-api-server stores snapshots under, for example gs://BUCKET/PREFIX/ (required if the PerTemplateSnapshotLocation preview gate is not enabled)",
 	},
 
 	{

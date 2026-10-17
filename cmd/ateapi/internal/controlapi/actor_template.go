@@ -36,6 +36,10 @@ func (s *RPCService) CreateActorTemplate(ctx context.Context, req *ateapipb.Crea
 	if in != nil { // otherwise validation will flag it
 		scrubResourceMetadataForCreate(in.Metadata)
 		in.Status = nil
+		// snapshot_config is optional; an omitted one takes every default.
+		if in.SnapshotConfig == nil {
+			in.SnapshotConfig = &ateapipb.SnapshotConfig{}
+		}
 		defaults.Apply(in)
 	}
 

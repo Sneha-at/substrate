@@ -354,7 +354,7 @@ func TestResolveSnapshotLocation(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			var gates []string
 			if tt.gateEnabled {
-				gates = []string{string(preview.GateSnapshotStorageLocation)}
+				gates = []string{string(preview.GatePerTemplateSnapshotLocation)}
 			}
 			preview.InitForTest(t, gates...)
 			tmpl := &ateapipb.ActorTemplate{

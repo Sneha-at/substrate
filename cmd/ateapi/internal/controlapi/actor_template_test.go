@@ -172,23 +172,23 @@ func TestCreateActorTemplate_RequiresSnapshotLocation(t *testing.T) {
 		wantCode: codes.FailedPrecondition,
 	}, {
 		name:     "gate on, location set, no cluster location",
-		gates:    []string{"SnapshotStorageLocation"},
+		gates:    []string{"PerTemplateSnapshotLocation"},
 		location: "gs://my-bucket/snapshots",
 		wantCode: codes.OK,
 	}, {
 		name:                    "gate on, no location, cluster location set",
-		gates:                   []string{"SnapshotStorageLocation"},
+		gates:                   []string{"PerTemplateSnapshotLocation"},
 		clusterSnapshotLocation: "gs://cluster-bucket/",
 		wantCode:                codes.OK,
 	}, {
 		name:                    "gate on, opted out, no location, cluster location set",
-		gates:                   []string{"SnapshotStorageLocation"},
+		gates:                   []string{"PerTemplateSnapshotLocation"},
 		optOut:                  true,
 		clusterSnapshotLocation: "gs://cluster-bucket/",
 		wantCode:                codes.OK,
 	}, {
 		name:     "gate on, no location, no cluster location",
-		gates:    []string{"SnapshotStorageLocation"},
+		gates:    []string{"PerTemplateSnapshotLocation"},
 		wantCode: codes.FailedPrecondition,
 	}}
 	for i, tt := range tests {
@@ -260,6 +260,33 @@ func TestCreateActorTemplateIgnoresServerOwnedFields(t *testing.T) {
 	}
 	if got := created.GetMetadata().GetUid(); got == "" || got == in.GetMetadata().GetUid() {
 		t.Errorf("created uid = %q, want a fresh server-assigned uid", got)
+	}
+}
+
+// TestCreateActorTemplateDefaultsOmittedSnapshotConfig pins that
+// snapshot_config is optional: create fills an omitted one with every default.
+func TestCreateActorTemplateDefaultsOmittedSnapshotConfig(t *testing.T) {
+	persistence := newTestPersistence(t)
+	impl := newServiceImpl(persistence, nil)
+	impl.clusterSnapshotLocation = "gs://cluster-bucket/"
+	s := &RPCService{impl: impl, sandboxConfigLister: gvisorDefaultLister(t)}
+	ctx := context.Background()
+	if _, err := persistence.CreateAtespace(ctx, &ateapipb.Atespace{Metadata: &ateapipb.ResourceMetadata{Name: "ns1"}}); err != nil {
+		t.Fatalf("CreateAtespace failed: %v", err)
+	}
+
+	created, err := s.CreateActorTemplate(ctx, &ateapipb.CreateActorTemplateRequest{ActorTemplate: validActorTemplate(func(tmpl *ateapipb.ActorTemplate) {
+		tmpl.SnapshotConfig = nil
+	})})
+	if err != nil {
+		t.Fatalf("CreateActorTemplate failed: %v", err)
+	}
+	want := &ateapipb.SnapshotConfig{
+		PreferredFidelity:    ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
+		GoldenSnapshotConfig: &ateapipb.GoldenSnapshotConfig{Mode: ateapipb.GoldenSnapshotMode_GOLDEN_SNAPSHOT_MODE_ENABLED},
+	}
+	if diff := cmp.Diff(want, created.GetSnapshotConfig(), protocmp.Transform()); diff != "" {
+		t.Errorf("CreateActorTemplate snapshot_config mismatch (-want +got):\n%s", diff)
 	}
 }
 
