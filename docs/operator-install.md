@@ -331,10 +331,10 @@ no default, and ate-setup fails before deploying without it unless the
 some other way, pass the flag yourself; without the gate, the server refuses to
 start without it.
 
-The kind scripts (`hack/install-ate-kind.sh`, `hack/run-e2e-kind.sh`,
-`hack/run-microvm-demo-kind.sh`) set `SNAPSHOT_LOCATION` to
-`gs://$BUCKET_NAME/` unless it is already set. On GKE, ate-setup does not
-create the bucket or grant access to it: run
+With `--kind`, ate-setup defaults `storage.snapshotLocation` to
+`gs://<storage.bucketName>/` (`gs://ate-snapshots/`, the bucket the in-cluster
+rustfs creates) and ignores an ambient `SNAPSHOT_LOCATION`. On GKE, ate-setup
+does not create the bucket or grant access to it: run
 `go run ./tools/setup-gcp create bucket` and
 `go run ./tools/setup-gcp create iam` first, or `bootstrap` for both (see
 [tools/setup-gcp](../tools/setup-gcp/README.md)).
