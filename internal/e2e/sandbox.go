@@ -166,18 +166,17 @@ func TemplateReadyTimeout(t *testing.T) time.Duration {
 // One template serves both sandbox classes so the two variants of a fixture
 // cannot drift apart. See renderManifest for the placeholder kinds a template
 // can carry.
-func RenderFixtureManifest(t *testing.T, relPath, bucket, name string) string {
+func RenderFixtureManifest(t *testing.T, relPath, name string) string {
 	t.Helper()
-	inline, blocks := fixtureSubstitutions(bucket, name)
+	inline, blocks := fixtureSubstitutions(name)
 	return renderManifest(t, relPath, inline, blocks)
 }
 
 // fixtureSubstitutions is the placeholder set the internal/e2e/fixtures
 // manifest templates carry, split into the inline and whole-line-block kinds
 // RenderFixtureManifest treats differently.
-func fixtureSubstitutions(bucket, name string) (inline, blocks map[string]string) {
+func fixtureSubstitutions(name string) (inline, blocks map[string]string) {
 	inline = map[string]string{
-		"${BUCKET_NAME}":  bucket,
 		"${WORKER_IMAGE}": "ko://go.ate.dev/substrate/cmd/ateworker-gvisor",
 		// The manifest-side half of FixtureName: it suffixes the fixture's
 		// namespace, and with it the snapshot prefix underneath.

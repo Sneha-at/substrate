@@ -182,13 +182,8 @@ func storageClassOrEmpty(ctx context.Context, t *testing.T, clients *e2e.Clients
 func createTemplate(ctx context.Context, t *testing.T, clients *e2e.Clients, ns *e2e.Namespace, fixtureImage, storageClass string) *ateapi.ActorTemplate {
 	t.Helper()
 
-	env, err := e2e.CheckEnv("BUCKET_NAME")
-	if err != nil {
-		t.Fatalf("CheckEnv: %v", err)
-	}
-
 	// The probe supplies this suite's container image and resolved runtime.
-	probeAtespace, _ := e2e.DeployProbe(t, env["BUCKET_NAME"], "combinedvolumes")
+	probeAtespace, _ := e2e.DeployProbe(t, "combinedvolumes")
 	src := e2e.SubstrateFixture{
 		Atespace:      probeAtespace,
 		Name:          probeName,

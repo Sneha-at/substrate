@@ -35,7 +35,8 @@ This guide assumes you know Kubernetes and the general shape of agent runtimes (
   kubectl port-forward svc/api 8080:443 -n ate-system
   ```
 - An **Anthropic API key** (the agents call Claude).
-- The snapshot bucket and image registry (`BUCKET_NAME`, `KO_DOCKER_REPO`) that your Substrate install uses. The deploy step builds and pushes the workload image to that registry with a sha256-pinned reference.
+- A snapshot location set at install (`SNAPSHOT_LOCATION`). The agents' snapshots are stored there.
+- The image registry (`KO_DOCKER_REPO`) that your Substrate install uses. The deploy step builds and pushes the workload image to that registry with a sha256-pinned reference.
 - `docker buildx` (the deploy function builds the workload image — a Dockerfile-based Python + Claude Code wrapper, not a Go binary, so `ko` doesn't apply for the workload itself).
 
 ## Components
@@ -59,7 +60,7 @@ ANTHROPIC_API_KEY=sk-ant-... \
 go run ./cmd/ate-setup deploy demo claude-code-multiplex
 ```
 
-This creates the `claude-multiplex-demo` namespace and its 2-pod `WorkerPool`, then the `claude-multiplex-demo` atespace and three actor templates in it named `agent-luna`, `agent-mars`, `agent-orion`, and waits for each template's golden snapshot. Under the hood, the deploy function builds the workload image with `docker buildx`, pushes it to `${KO_DOCKER_REPO}/claude-multiplex-demo-workload`, resolves the pushed sha256 digest, and substitutes the digest-pinned reference plus `ANTHROPIC_API_KEY` and `BUCKET_NAME` into the agent templates at apply time.
+This creates the `claude-multiplex-demo` namespace and its 2-pod `WorkerPool`, then the `claude-multiplex-demo` atespace and three actor templates in it named `agent-luna`, `agent-mars`, `agent-orion`, and waits for each template's golden snapshot. Under the hood, the deploy function builds the workload image with `docker buildx`, pushes it to `${KO_DOCKER_REPO}/claude-multiplex-demo-workload`, resolves the pushed sha256 digest, and substitutes the digest-pinned reference and `ANTHROPIC_API_KEY` into the agent templates at apply time.
 
 ### 2. Start the dashboard
 

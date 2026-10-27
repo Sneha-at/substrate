@@ -79,7 +79,7 @@ var substrateFixtures = []struct {
 // a WorkerPool that never gets a micro-VM worker.
 func renderPool(t *testing.T, relPath string) *atev1.WorkerPool {
 	t.Helper()
-	raw, err := os.ReadFile(RenderFixtureManifest(t, relPath, "test-bucket", "render"))
+	raw, err := os.ReadFile(RenderFixtureManifest(t, relPath, "render"))
 	if err != nil {
 		t.Fatalf("reading the rendered %s: %v", relPath, err)
 	}
@@ -115,7 +115,7 @@ func renderPool(t *testing.T, relPath string) *atev1.WorkerPool {
 // the cluster as literal text.
 func renderTemplates(t *testing.T, relPath string, values map[string]string) []*ateapi.ActorTemplate {
 	t.Helper()
-	inline, blocks := substrateTemplateSubstitutions("test-bucket", "render", nil)
+	inline, blocks := substrateTemplateSubstitutions("render", nil)
 	maps.Copy(inline, values)
 	rendered, err := os.ReadFile(renderManifest(t, relPath, inline, blocks))
 	if err != nil {

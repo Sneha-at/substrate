@@ -48,7 +48,7 @@ func Env(t *testing.T) *steps.Env {
 	if err != nil {
 		t.Fatalf("Resolve: %v", err)
 	}
-	cfg := &config.Config{Root: root, BucketName: "ate-snapshots"}
+	cfg := &config.Config{Root: root}
 	cfg.SetResolved(r)
 	return &steps.Env{Cfg: cfg}
 }

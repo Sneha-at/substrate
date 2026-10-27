@@ -111,8 +111,7 @@ var withPlaceholder = []string{
 //	hack/setup-e2e-egress-tls-kind.sh
 //	hack/run-e2e-kind.sh ./internal/e2e/suites/egresscredinject -v -args --no-color
 func TestActorEgressCredentialInjection(t *testing.T) {
-	env, err := e2e.CheckEnv("BUCKET_NAME", "KO_DOCKER_REPO")
-	if err != nil {
+	if _, err := e2e.CheckEnv("KO_DOCKER_REPO"); err != nil {
 		t.Fatalf("CheckEnv failed: %v", err)
 	}
 	ctx := context.Background()
@@ -124,7 +123,7 @@ func TestActorEgressCredentialInjection(t *testing.T) {
 
 	e2e.ConfigureCredentialProvider(t)
 
-	probeNamespace, _ = e2e.DeployProbe(t, env["BUCKET_NAME"], "egresscredinject", e2e.WithTrustBundle())
+	probeNamespace, _ = e2e.DeployProbe(t, "egresscredinject", e2e.WithTrustBundle())
 
 	const id = "probe-credinject"
 	createAndResumeActor(t, ctx, clients, id, echoHost)
