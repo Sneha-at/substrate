@@ -21,8 +21,10 @@ import (
 
 	"go.ate.dev/substrate/api/ateapi/v1"
 	atev1 "go.ate.dev/substrate/api/infra/k8s/ate/v1"
+	"go.ate.dev/substrate/internal/preview"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
@@ -100,8 +102,13 @@ func CreateSubstrateTemplateFrom(ctx context.Context, t *testing.T, clients *Cli
 	}
 
 	snapshots := opts.SnapshotConfig
-	if snapshots == nil {
-		snapshots = srcTmpl.GetSnapshotConfig()
+	if snapshots == nil && srcTmpl.GetSnapshotConfig() != nil {
+		snapshots = proto.Clone(srcTmpl.GetSnapshotConfig()).(*ateapi.SnapshotConfig)
+		// A source stored before the API rejected storageLocation without
+		// its gate may still carry one.
+		if !preview.IsEnabled(preview.GatePerTemplateSnapshotLocation) {
+			snapshots.StorageLocation = ""
+		}
 	}
 	tmpl := &ateapi.ActorTemplate{
 		Metadata:       &ateapi.ResourceMetadata{Atespace: opts.Atespace, Name: opts.Name},

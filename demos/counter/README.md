@@ -10,6 +10,7 @@ The demo uses two kinds of resources: the `WorkerPool` is a Kubernetes CRD, whil
 
 - A k8s cluster with Agent Substrate installed as in the [Quickstart](../../README.md#quickstart-development)
   (with `ATE_INSTALL_KIND=true` exported in your shell) or [GKE Quickstart](../../README.md#gke-quickstart-development).
+- A snapshot location set at install (`SNAPSHOT_LOCATION`). The demo stores its snapshots there.
 
 ## How to Run on Agent Substrate
 
@@ -21,9 +22,8 @@ it, skip to [How to Use](#how-to-use).
 
 > [!NOTE]
 > Do not manually edit `demos/counter/counter.yaml.tmpl` or
-> `demos/counter/counter-template.yaml.tmpl`. `ate-setup`
-> automatically injects your `${BUCKET_NAME}` environment variable during
-> deployment.
+> `demos/counter/counter-template.yaml.tmpl`. `ate-setup` fills in their
+> `${...}` placeholders during deployment.
 
 <details>
 <summary>Installation on MicroVM</summary>

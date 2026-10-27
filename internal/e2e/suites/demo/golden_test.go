@@ -45,10 +45,8 @@ func TestGoldenSnapshotLifecycle(t *testing.T) {
 			})
 			created := e2e.CreateSubstrateCounterTemplate(ctx, t, clients, ns.Name, e2e.SubstrateTemplateOptions{
 				Atespace: atespace, Name: "counter", PoolName: "counter", PoolReplicas: 1,
-				Labels: map[string]string{"golden-e2e": ns.Name},
-				SnapshotConfig: &ateapi.SnapshotConfig{
-					PreferredFidelity: fidelity,
-				},
+				Labels:         map[string]string{"golden-e2e": ns.Name},
+				SnapshotConfig: templateSnapshotConfig(t, fidelity, atespace),
 			})
 
 			templateRef := e2e.TemplateRef(created)

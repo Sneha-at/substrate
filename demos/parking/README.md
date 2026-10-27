@@ -15,15 +15,11 @@ See [docs/request-parking.md](../../docs/request-parking.md) for the design.
 
 - A k8s cluster with Agent Substrate installed as in the [Quickstart](../../README.md#quickstart-development)
   (with `ATE_INSTALL_KIND=true` exported in your shell) or [GKE Quickstart](../../README.md#gke-quickstart-development).
+- A snapshot location set at install (`SNAPSHOT_LOCATION`). The demo stores its snapshots there.
 
 ## How to Run on Agent Substrate
 
 ### 1. Build and Deploy
-
-> [!NOTE]
-> Do not manually edit the `demos/parking/*.yaml.tmpl` manifests. `ate-setup`
-> automatically injects your `${BUCKET_NAME}` environment variable during
-> deployment.
 
 ```bash
 go run ./cmd/ate-setup deploy demo parking

@@ -420,9 +420,9 @@ func TestRepointMovesTheGrant(t *testing.T) {
 	xchg := dialExchange(t, ctx, clients)
 	stamp := time.Now().UTC().Format("20060102T150405Z")
 
-	// Template B is the probe template under another location in the same
-	// bucket. Its golden is not what the actor resumes from, but the actor's
-	// next snapshot goes under B's location.
+	// Template B is the probe template under a location in $BUCKET_NAME. The
+	// probe itself uses $SNAPSHOT_LOCATION. B's golden is not what the actor
+	// resumes from, but the actor's next snapshot goes under B's location.
 	const nameB = "probe-repoint"
 	locationB := "gs://" + env["BUCKET_NAME"] + "/ate-e2e-repoint-" + stamp + "/"
 	templateB := proto.Clone(probe).(*ateapi.ActorTemplate)

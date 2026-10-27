@@ -1338,19 +1338,9 @@ func deletePausedActor(ctx context.Context, t *testing.T, clients *e2e.Clients, 
 }
 
 func createActorTemplateInternal(ctx context.Context, t *testing.T, clients *e2e.Clients, nsObj *e2e.Namespace, base string, fidelity ateapi.SnapshotFidelity, modifyTemplate func(*ateapi.ActorTemplate)) (*ateapi.ActorTemplate, error) {
-	env, err := e2e.CheckEnv("BUCKET_NAME")
-	if err != nil {
-		t.Fatalf("CheckEnv failed: %v", err)
-	}
-
 	// The whole suite shares demoAtespace, so the per-test suffix keeps
 	// template names unique.
 	name := base + "-" + nsObj.Name
-	snapshotConfig := &ateapi.SnapshotConfig{PreferredFidelity: fidelity}
-	// The API rejects storageLocation without the gate.
-	if preview.IsEnabled(preview.GatePerTemplateSnapshotLocation) {
-		snapshotConfig.StorageLocation = "gs://" + env["BUCKET_NAME"] + "/ate-demo-" + name
-	}
 	at := e2e.CreateSubstrateCounterTemplate(ctx, t, clients, nsObj.Name, e2e.SubstrateTemplateOptions{
 		Atespace: demoAtespace,
 		Name:     name,
@@ -1358,10 +1348,26 @@ func createActorTemplateInternal(ctx context.Context, t *testing.T, clients *e2e
 		// One actor at a time, plus a spare for the worker-deletion tests.
 		PoolReplicas:   2,
 		Labels:         map[string]string{"demo": nsObj.Name},
-		SnapshotConfig: snapshotConfig,
+		SnapshotConfig: templateSnapshotConfig(t, fidelity, "ate-demo-"+name),
 		Modify:         modifyTemplate,
 	})
 	return at, nil
+}
+
+// templateSnapshotConfig returns a SnapshotConfig that captures at fidelity.
+// With the PerTemplateSnapshotLocation gate it also stores snapshots under
+// prefix in $BUCKET_NAME. The API rejects storageLocation without the gate.
+func templateSnapshotConfig(t *testing.T, fidelity ateapi.SnapshotFidelity, prefix string) *ateapi.SnapshotConfig {
+	t.Helper()
+	cfg := &ateapi.SnapshotConfig{PreferredFidelity: fidelity}
+	if preview.IsEnabled(preview.GatePerTemplateSnapshotLocation) {
+		env, err := e2e.CheckEnv("BUCKET_NAME")
+		if err != nil {
+			t.Fatalf("CheckEnv failed: %v", err)
+		}
+		cfg.StorageLocation = "gs://" + env["BUCKET_NAME"] + "/" + prefix
+	}
+	return cfg
 }
 
 func createActorTemplate(ctx context.Context, t *testing.T, clients *e2e.Clients, nsObj *e2e.Namespace, fidelity ateapi.SnapshotFidelity) (*ateapi.ActorTemplate, error) {
