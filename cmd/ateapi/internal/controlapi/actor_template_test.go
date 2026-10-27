@@ -95,11 +95,9 @@ func TestCreateActorTemplate_RequiresSnapshotLocation(t *testing.T) {
 	}{{
 		name:                    "gate off, cluster location set",
 		clusterSnapshotLocation: "gs://cluster-bucket/",
-		location:                "gs://my-bucket/snapshots",
 		wantCode:                codes.OK,
 	}, {
 		name:     "gate off, no cluster location",
-		location: "gs://my-bucket/snapshots",
 		wantCode: codes.FailedPrecondition,
 	}, {
 		name:     "gate on, location set, no cluster location",

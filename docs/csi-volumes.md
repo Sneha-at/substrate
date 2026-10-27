@@ -192,8 +192,6 @@ resources:
   limits:
     cpuMillicores: 1000
     memoryBytes: 1073741824 # 1Gi
-snapshotConfig:
-  storageLocation: gs://my-snapshots-bucket/stateful-agent
 volumes:
 - name: shared-storage
   external:

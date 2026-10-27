@@ -35,10 +35,6 @@ func TestGoldenSnapshotLifecycle(t *testing.T) {
 			ctx := t.Context()
 			clients := e2e.GetClients()
 			ns := e2e.CreateNamespace(t)
-			env, err := e2e.CheckEnv("BUCKET_NAME")
-			if err != nil {
-				t.Fatal(err)
-			}
 			// A distinct atespace catches placement in a system atespace and
 			// keeps cleanup independent of the suite's shared demo atespace.
 			atespace := "golden-" + ns.Name
@@ -51,7 +47,6 @@ func TestGoldenSnapshotLifecycle(t *testing.T) {
 				Atespace: atespace, Name: "counter", PoolName: "counter", PoolReplicas: 1,
 				Labels: map[string]string{"golden-e2e": ns.Name},
 				SnapshotConfig: &ateapi.SnapshotConfig{
-					StorageLocation:   "gs://" + env["BUCKET_NAME"] + "/" + atespace,
 					PreferredFidelity: fidelity,
 				},
 			})

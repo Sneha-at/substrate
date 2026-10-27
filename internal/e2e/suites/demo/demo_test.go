@@ -1346,18 +1346,20 @@ func createActorTemplateInternal(ctx context.Context, t *testing.T, clients *e2e
 	// The whole suite shares demoAtespace, so the per-test suffix keeps
 	// template names unique.
 	name := base + "-" + nsObj.Name
+	snapshotConfig := &ateapi.SnapshotConfig{PreferredFidelity: fidelity}
+	// The API rejects storageLocation without the gate.
+	if preview.IsEnabled(preview.GatePerTemplateSnapshotLocation) {
+		snapshotConfig.StorageLocation = "gs://" + env["BUCKET_NAME"] + "/ate-demo-" + name
+	}
 	at := e2e.CreateSubstrateCounterTemplate(ctx, t, clients, nsObj.Name, e2e.SubstrateTemplateOptions{
 		Atespace: demoAtespace,
 		Name:     name,
 		PoolName: base,
 		// One actor at a time, plus a spare for the worker-deletion tests.
-		PoolReplicas: 2,
-		Labels:       map[string]string{"demo": nsObj.Name},
-		SnapshotConfig: &ateapi.SnapshotConfig{
-			StorageLocation:   "gs://" + env["BUCKET_NAME"] + "/ate-demo-" + name,
-			PreferredFidelity: fidelity,
-		},
-		Modify: modifyTemplate,
+		PoolReplicas:   2,
+		Labels:         map[string]string{"demo": nsObj.Name},
+		SnapshotConfig: snapshotConfig,
+		Modify:         modifyTemplate,
 	})
 	return at, nil
 }

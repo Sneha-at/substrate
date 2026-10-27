@@ -8285,6 +8285,13 @@ func Validate_SnapshotConfig(
 			}
 			// call field-attached validations
 			earlyReturn := false
+			if e := validate.IfOption(ctx, op, fldPath, obj, oldObj, "PerTemplateSnapshotLocation", false, validate.ForbiddenValue).MarkShortCircuit(); len(e) != 0 {
+				errs = append(errs, e...)
+				earlyReturn = true
+			}
+			if e := validate.IfOption(ctx, op, fldPath, obj, oldObj, "PerTemplateSnapshotLocation", false, validate.OptionalValue).MarkShortCircuit(); len(e) != 0 {
+				earlyReturn = true
+			}
 			if e := validate.OptionalValue(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
 				earlyReturn = true
 			}

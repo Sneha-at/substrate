@@ -149,14 +149,12 @@ func TestRenderSubstrateFixtures_GVisor(t *testing.T) {
 			}
 			for _, tmpl := range templates {
 				name := tmpl.GetMetadata().GetName()
-				// An inline placeholder with an empty value must substitute, not
-				// delete its line: the location is what the golden snapshot needs.
-				location := tmpl.GetSnapshotConfig().GetStorageLocation()
-				if want := "gs://test-bucket/"; !strings.HasPrefix(location, want) {
-					t.Errorf("template %s snapshot location = %q, want it to start with %q", name, location, want)
+				atespace := tmpl.GetMetadata().GetAtespace()
+				if want := "-render"; !strings.HasSuffix(atespace, want) {
+					t.Errorf("template %s atespace = %q, want it to end with %q", name, atespace, want)
 				}
-				if strings.Contains(location, "-microvm") {
-					t.Errorf("template %s snapshot location = %q, want no micro-VM suffix", name, location)
+				if strings.Contains(atespace, "-microvm") {
+					t.Errorf("template %s atespace = %q, want no micro-VM suffix", name, atespace)
 				}
 				// The selector is what ties the template to its fixture's pool.
 				for k, v := range tmpl.GetWorkerSelector().GetMatchLabels() {
@@ -170,7 +168,7 @@ func TestRenderSubstrateFixtures_GVisor(t *testing.T) {
 }
 
 // TestRenderSubstrateFixtures_MicroVM pins the micro-VM rendering: the
-// templates carry limits and the snapshots land under their own prefix.
+// templates carry limits and land in their own atespace.
 func TestRenderSubstrateFixtures_MicroVM(t *testing.T) {
 	t.Setenv(sandboxClassEnv, SandboxClassMicroVM)
 	for _, fixture := range substrateFixtures {
@@ -193,9 +191,9 @@ func TestRenderSubstrateFixtures_MicroVM(t *testing.T) {
 				if tmpl.GetResources().GetLimits().GetMemoryBytes() == 0 {
 					t.Errorf("template %s declares no memory limit", name)
 				}
-				location := tmpl.GetSnapshotConfig().GetStorageLocation()
-				if want := "-microvm-render/"; !strings.HasSuffix(location, want) {
-					t.Errorf("template %s snapshot location = %q, want it to end with %q", name, location, want)
+				atespace := tmpl.GetMetadata().GetAtespace()
+				if want := "-microvm-render"; !strings.HasSuffix(atespace, want) {
+					t.Errorf("template %s atespace = %q, want it to end with %q", name, atespace, want)
 				}
 			}
 		})

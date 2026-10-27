@@ -363,7 +363,7 @@ With the `PerTemplateSnapshotLocation` preview gate, an ActorTemplate may set
 that leave it empty use `--snapshot-location`. Grant ate-api-server's identity
 and the snapshot transfer service account object admin and bucket viewer on
 any other bucket a template names, as setup-gcp does on the snapshot bucket. Without the gate,
-ate-api-server ignores `snapshotConfig.storageLocation`. See
+ate-api-server rejects templates that set `snapshotConfig.storageLocation`. See
 [Snapshot Storage Layout](api-guide.md#snapshot-storage-layout).
 
 ## Ingress to actors

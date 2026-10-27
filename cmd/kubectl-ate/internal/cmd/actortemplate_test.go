@@ -158,17 +158,16 @@ func TestActorTemplateFromManifest_DemoManifests(t *testing.T) {
 			if err != nil {
 				t.Fatalf("reading demo manifest: %v", err)
 			}
-			// ate-setup substitutes the bucket and drops the unused
-			// optional placeholder lines before applying.
-			rendered := strings.ReplaceAll(string(data), "${BUCKET_NAME}", "ate-snapshots")
+			// ate-setup drops the unused optional placeholder lines before
+			// applying.
 			var kept []string
-			for _, line := range strings.Split(rendered, "\n") {
+			for _, line := range strings.Split(string(data), "\n") {
 				if strings.Contains(line, "${") {
 					continue
 				}
 				kept = append(kept, line)
 			}
-			rendered = strings.Join(kept, "\n")
+			rendered := strings.Join(kept, "\n")
 
 			got, err := actorTemplateFromManifest([]byte(rendered))
 			if err != nil {
@@ -178,7 +177,7 @@ func TestActorTemplateFromManifest_DemoManifests(t *testing.T) {
 				t.Errorf("metadata = %s/%s, want %s/%s",
 					got.GetMetadata().GetAtespace(), got.GetMetadata().GetName(), test.atespace, test.name)
 			}
-			if len(got.GetContainers()) == 0 || got.GetSnapshotConfig().GetStorageLocation() == "" {
+			if len(got.GetContainers()) == 0 || got.GetSnapshotConfig().GetPreferredFidelity() == ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_UNSPECIFIED {
 				t.Errorf("missing required fields: %v", got)
 			}
 		})

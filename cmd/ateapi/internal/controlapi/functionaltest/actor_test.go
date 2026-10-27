@@ -277,10 +277,9 @@ func TestCreateActor_SubstrateTemplateRef(t *testing.T) {
 	ctx := context.Background()
 	if _, err := tc.client.CreateActorTemplate(ctx, &ateapi.CreateActorTemplateRequest{
 		ActorTemplate: &ateapi.ActorTemplate{
-			Metadata:       &ateapi.ResourceMetadata{Atespace: testAtespace, Name: "sub-tmpl"},
-			Containers:     []*ateapi.Container{{Name: "main", Image: "example.com/app:v1@sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"}},
-			SnapshotConfig: &ateapi.SnapshotConfig{StorageLocation: "gs://my-bucket/snapshots"},
-			Resources:      &ateapi.ResourceRequirements{Limits: resources.CPUMemory(1000, 512<<20)},
+			Metadata:   &ateapi.ResourceMetadata{Atespace: testAtespace, Name: "sub-tmpl"},
+			Containers: []*ateapi.Container{{Name: "main", Image: "example.com/app:v1@sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"}},
+			Resources:  &ateapi.ResourceRequirements{Limits: resources.CPUMemory(1000, 512<<20)},
 		},
 	}); err != nil {
 		t.Fatalf("CreateActorTemplate failed: %v", err)
@@ -401,8 +400,7 @@ func TestCreateActor_RejectsSnapshotWithExternalVolumes(t *testing.T) {
 	defer tc.cleanup()
 	template, err := tc.client.CreateActorTemplate(context.Background(), &ateapi.CreateActorTemplateRequest{
 		ActorTemplate: &ateapi.ActorTemplate{
-			Metadata:       &ateapi.ResourceMetadata{Atespace: testAtespace, Name: "tmpl1"},
-			SnapshotConfig: &ateapi.SnapshotConfig{StorageLocation: "gs://snapshots"},
+			Metadata: &ateapi.ResourceMetadata{Atespace: testAtespace, Name: "tmpl1"},
 			Containers: []*ateapi.Container{{
 				Name: "main", Image: "main@sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855", VolumeMounts: []*ateapi.VolumeMount{{Name: "data", MountPath: "/data"}},
 			}},
@@ -894,9 +892,8 @@ func TestUpdateActor_RepointTemplate(t *testing.T) {
 							Image:        "example.com/app:v1@sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
 							VolumeMounts: []*ateapi.VolumeMount{{Name: "data", MountPath: tmpl.mountPath}},
 						}},
-						Volumes:        tmpl.volumes,
-						SnapshotConfig: &ateapi.SnapshotConfig{StorageLocation: "gs://my-bucket/snapshots"},
-						Resources:      &ateapi.ResourceRequirements{Limits: resources.CPUMemory(1000, 512<<20)},
+						Volumes:   tmpl.volumes,
+						Resources: &ateapi.ResourceRequirements{Limits: resources.CPUMemory(1000, 512<<20)},
 					},
 				}); err != nil {
 					t.Fatalf("CreateActorTemplate %s failed: %v", name, err)
@@ -3421,7 +3418,6 @@ func createDataFidelityTemplate(t *testing.T, tc *testContext, ns string) *ateap
 				Name:     "tmpl1",
 			},
 			SnapshotConfig: &ateapi.SnapshotConfig{
-				StorageLocation:   testStorageLocation,
 				PreferredFidelity: ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES,
 			},
 			Containers: []*ateapi.Container{{
