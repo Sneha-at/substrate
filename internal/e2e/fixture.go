@@ -165,6 +165,13 @@ func DeploySubstrateFixture(t *testing.T, ctx context.Context, clients *Clients,
 		if got := tmpl.GetMetadata().GetAtespace(); got != atespace {
 			t.Fatalf("fixture %s declares templates in different atespaces (%q and %q)", manifests.Template, atespace, got)
 		}
+		location := SnapshotLocation(t, "ate-e2e-"+tmpl.GetMetadata().GetName()+tmplInline["${FIXTURE_SUFFIX}"])
+		if location != "" {
+			if tmpl.SnapshotConfig == nil {
+				tmpl.SnapshotConfig = &ateapi.SnapshotConfig{}
+			}
+			tmpl.SnapshotConfig.StorageLocation = location
+		}
 	}
 
 	if _, err := clients.SubstrateAPI.CreateAtespace(ctx, &ateapi.CreateAtespaceRequest{Atespace: &ateapi.Atespace{Metadata: &ateapi.ResourceMetadata{Name: atespace}}}); err != nil && status.Code(err) != codes.AlreadyExists {

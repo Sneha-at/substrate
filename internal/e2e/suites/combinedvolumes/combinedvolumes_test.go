@@ -200,6 +200,9 @@ func createTemplate(ctx context.Context, t *testing.T, clients *e2e.Clients, ns 
 		// The pool is labeled uniquely to this namespace so the cluster-wide
 		// scheduler cannot hand its workers to another suite's actors.
 		Labels: map[string]string{"combinedvolumes": ns.Name},
+		SnapshotConfig: &ateapi.SnapshotConfig{
+			StorageLocation: e2e.SnapshotLocation(t, ns.Name),
+		},
 		Modify: func(tmpl *ateapi.ActorTemplate) {
 			// Every volume is mounted at two paths, covering the read-only
 			// (image), writable (durable-dir) and per-actor provisioned

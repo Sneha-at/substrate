@@ -1354,20 +1354,14 @@ func createActorTemplateInternal(ctx context.Context, t *testing.T, clients *e2e
 	return at, nil
 }
 
-// templateSnapshotConfig returns a SnapshotConfig that captures at fidelity.
-// With the PerTemplateSnapshotLocation gate it also stores snapshots under
-// prefix in $BUCKET_NAME. The API rejects storageLocation without the gate.
+// templateSnapshotConfig returns a SnapshotConfig that captures at fidelity,
+// stored under e2e.SnapshotLocation(prefix).
 func templateSnapshotConfig(t *testing.T, fidelity ateapi.SnapshotFidelity, prefix string) *ateapi.SnapshotConfig {
 	t.Helper()
-	cfg := &ateapi.SnapshotConfig{PreferredFidelity: fidelity}
-	if preview.IsEnabled(preview.GatePerTemplateSnapshotLocation) {
-		env, err := e2e.CheckEnv("BUCKET_NAME")
-		if err != nil {
-			t.Fatalf("CheckEnv failed: %v", err)
-		}
-		cfg.StorageLocation = "gs://" + env["BUCKET_NAME"] + "/" + prefix
+	return &ateapi.SnapshotConfig{
+		PreferredFidelity: fidelity,
+		StorageLocation:   e2e.SnapshotLocation(t, prefix),
 	}
-	return cfg
 }
 
 func createActorTemplate(ctx context.Context, t *testing.T, clients *e2e.Clients, nsObj *e2e.Namespace, fidelity ateapi.SnapshotFidelity) (*ateapi.ActorTemplate, error) {
