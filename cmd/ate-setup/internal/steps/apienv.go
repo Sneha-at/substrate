@@ -187,7 +187,9 @@ func sharedBootstrapOwnerWarning(bootstrapOwners, namespace string) string {
 // snapshots. It is used whether or not the PerTemplateSnapshotLocation preview
 // gate is enabled; with the gate, an actor template's
 // snapshotConfig.storageLocation overrides it. It may be empty only when the
-// gate is enabled, in which case every template must set its own.
+// gate is enabled. CreateActorTemplate then fails with FailedPrecondition for
+// a template without storageLocation, which includes every demo and
+// benchmark.
 func clusterSnapshotLocation(location string, gates []string) (string, error) {
 	if location != "" {
 		if err := resources.ValidateSnapshotLocation(location); err != nil {

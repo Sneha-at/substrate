@@ -935,7 +935,6 @@ func TestCreateActor_DoesNotInheritGoldenEgressPolicy(t *testing.T) {
 			storetest.MustCreateAtespace(t, ctx, persistence, "actors")
 			tmpl, err := svc.CreateActorTemplate(ctx, &ateapi.CreateActorTemplateRequest{ActorTemplate: validActorTemplate(func(tmpl *ateapi.ActorTemplate) {
 				tmpl.Metadata = &ateapi.ResourceMetadata{Atespace: "templates", Name: "tmpl"}
-				tmpl.SnapshotConfig.StorageLocation = ""
 				tmpl.GoldenEgressPolicy = tt.policy
 			})})
 			if err != nil {

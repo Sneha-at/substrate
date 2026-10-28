@@ -147,7 +147,7 @@ var Registry = []Setting{
 
 	{
 		Key: "storage.bucketName", Env: "BUCKET_NAME", Flag: "storage-bucket-name", Kind: KindString,
-		Usage: "Snapshot bucket the demos are templated with",
+		Usage: "Object-storage bucket passed to install scripts; the kind profile derives --snapshot-location from it",
 	},
 	{
 		Key: "storage.snapshotLocation", Env: "SNAPSHOT_LOCATION", Flag: "snapshot-location", Kind: KindString,

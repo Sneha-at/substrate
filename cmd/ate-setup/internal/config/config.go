@@ -129,14 +129,18 @@ type Config struct {
 	// defaults to the in-cluster URL of the install's ate-idp-server Service.
 	ActorJWTIssuer string
 
-	// BucketName is the snapshot bucket demos are templated with.
+	// BucketName is the object-storage bucket (BUCKET_NAME) passed to install
+	// scripts such as hack/install-microvm-deps.sh. The kind profile also
+	// derives SnapshotLocation from it.
 	BucketName string
 
 	// SnapshotLocation is ate-api-server's --snapshot-location
 	// (SNAPSHOT_LOCATION): the cluster-wide object-storage URI actor snapshots
 	// are stored under. Required unless the PerTemplateSnapshotLocation
 	// preview gate is enabled, which also lets a
-	// template's snapshotConfig.storageLocation override it.
+	// template's snapshotConfig.storageLocation override it. The demos and
+	// benchmarks, and so e2e runs, need it even with the gate, since they do
+	// not set storageLocation.
 	SnapshotLocation string
 
 	// TransferGSAName is the name of the Google service account snapshot

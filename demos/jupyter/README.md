@@ -6,6 +6,7 @@ This demo runs a Jupyter Notebook on Agent Substrate. It demonstrates how standa
 
 - A k8s cluster with Agent Substrate installed as in the [Quickstart](../../README.md#quickstart-development)
   (with `ATE_INSTALL_KIND=true` exported in your shell) or [GKE Quickstart](../../README.md#gke-quickstart-development).
+- A snapshot location set at install (`SNAPSHOT_LOCATION`). The demo stores its snapshots there.
 
 ## Deploy the Jupyter Notebook Demo
 

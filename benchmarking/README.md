@@ -12,12 +12,11 @@ scenario ladder, read [observability.md](observability.md).
 
 > [!IMPORTANT]
 > Source the environment configuration file (e.g., `source .ate-dev-env.sh`)
-> first so `PROJECT_ID`, `BUCKET_NAME`, etc. are set.
+> first so `PROJECT_ID` etc. are set.
 >
 > **For Local Kind Clusters**: Set `KO_DOCKER_REPO` to the local registry so images are pulled without remote cloud credentials:
 > ```bash
 > export KO_DOCKER_REPO="localhost:5001"
-> export BUCKET_NAME="ate-snapshots"
 > ```
 
 > [!IMPORTANT]

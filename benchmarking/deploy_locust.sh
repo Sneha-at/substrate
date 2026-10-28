@@ -63,7 +63,7 @@ usage() {
   echo "  -h|--help               Show this help message"
   echo ""
   echo "Environment:"
-  echo "  PROJECT_ID, BUCKET_NAME, etc. are read from .ate-dev-env.sh by the"
+  echo "  PROJECT_ID etc. are read from .ate-dev-env.sh by the"
   echo "  scripts this wrapper invokes."
 }
 

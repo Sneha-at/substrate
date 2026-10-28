@@ -69,8 +69,9 @@ type Substrate struct {
 	GoldenTimeout time.Duration
 
 	// RenderValues optionally supplies placeholder values at deploy time, for
-	// demos whose manifests need them (e.g. a freshly built image digest). Delete renders only the pool manifest, so
-	// deploy-only values may live solely here.
+	// demos whose manifests need them (e.g. a freshly built image digest).
+	// Delete renders only the pool manifest, so deploy-only values may live
+	// solely here.
 	RenderValues func(ctx context.Context, e *steps.Env) (map[string]string, error)
 }
 

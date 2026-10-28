@@ -85,6 +85,10 @@ func AssertRenderedActorTemplate(t *testing.T, manifest []byte, want resources.A
 	if got := resources.ActorTemplateRefFromActorTemplate(template); got != want {
 		t.Errorf("manifest names template %s, want %s", got, want)
 	}
+	// The API rejects storageLocation without its preview gate.
+	if got := template.GetSnapshotConfig().GetStorageLocation(); got != "" {
+		t.Errorf("manifest sets storageLocation %q, want none", got)
+	}
 }
 
 // assertNoPlaceholders checks that no non-comment line still contains a

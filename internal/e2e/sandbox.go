@@ -179,7 +179,7 @@ func fixtureSubstitutions(name string) (inline, blocks map[string]string) {
 	inline = map[string]string{
 		"${WORKER_IMAGE}": "ko://go.ate.dev/substrate/cmd/ateworker-gvisor",
 		// The manifest-side half of FixtureName: it suffixes the fixture's
-		// namespace, and with it the snapshot prefix underneath.
+		// namespace.
 		"${FIXTURE_SUFFIX}": "-" + name,
 	}
 	blocks = map[string]string{

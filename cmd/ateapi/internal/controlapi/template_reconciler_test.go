@@ -705,7 +705,6 @@ func TestReconcileOne_GoldenEgressPolicyBeforeResume(t *testing.T) {
 			storetest.MustCreateAtespace(t, ctx, persistence, "templates")
 			tmpl, err := svc.CreateActorTemplate(ctx, &ateapi.CreateActorTemplateRequest{ActorTemplate: validActorTemplate(func(tmpl *ateapi.ActorTemplate) {
 				tmpl.Metadata = &ateapi.ResourceMetadata{Atespace: "templates", Name: "tmpl"}
-				tmpl.SnapshotConfig.StorageLocation = ""
 				tmpl.GoldenEgressPolicy = tt.policy
 			})})
 			if err != nil {
@@ -761,7 +760,6 @@ func TestReconcileOne_GoldenEgressPolicyRecovery(t *testing.T) {
 			storetest.MustCreateAtespace(t, ctx, persistence, "templates")
 			tmpl, err := svc.CreateActorTemplate(ctx, &ateapi.CreateActorTemplateRequest{ActorTemplate: validActorTemplate(func(tmpl *ateapi.ActorTemplate) {
 				tmpl.Metadata = &ateapi.ResourceMetadata{Atespace: "templates", Name: "tmpl"}
-				tmpl.SnapshotConfig.StorageLocation = ""
 				tmpl.GoldenEgressPolicy = &ateapi.EgressPolicyTemplate{Rules: []*ateapi.EgressRule{
 					{Https: &ateapi.HttpsRule{Hostnames: []string{"api.example.com"}}},
 				}}

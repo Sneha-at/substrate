@@ -177,8 +177,12 @@ func TestActorTemplateFromManifest_DemoManifests(t *testing.T) {
 				t.Errorf("metadata = %s/%s, want %s/%s",
 					got.GetMetadata().GetAtespace(), got.GetMetadata().GetName(), test.atespace, test.name)
 			}
-			if len(got.GetContainers()) == 0 || got.GetSnapshotConfig().GetPreferredFidelity() == ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_UNSPECIFIED {
-				t.Errorf("missing required fields: %v", got)
+			if len(got.GetContainers()) == 0 {
+				t.Errorf("manifest has no containers: %v", got)
+			}
+			// The API rejects storageLocation without its preview gate.
+			if location := got.GetSnapshotConfig().GetStorageLocation(); location != "" {
+				t.Errorf("manifest sets storageLocation %q, want none", location)
 			}
 		})
 	}
