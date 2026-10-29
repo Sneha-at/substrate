@@ -2297,7 +2297,9 @@ message CreateTagRequest {
   // every external volume; names narrows the set.
   //
   // Capturing requires the driver of every captured volume to support
-  // snapshots, and fails the call if any does not.
+  // snapshots, and fails the call if any does not. Volumes that reference an
+  // ExternalVolume are never captured. The call fails if no volume is left to
+  // capture.
   //
   // +ate:preview=ExternalVolumes
   // +k8s:ifDisabled(ExternalVolumes)=+k8s:forbidden
@@ -2310,7 +2312,8 @@ message CreateTagRequest {
 message ExternalVolumeSelection {
   // names limits the capture to these external volumes of the source Actor,
   // named as in its ActorTemplate. Empty captures every external volume. A
-  // name the Actor has no external volume for fails the call.
+  // name the Actor has no external volume for, or one that references an
+  // ExternalVolume, fails the call.
   //
   // Volumes left out are not recorded on the tag, and an Actor created from
   // it gets them provisioned empty.

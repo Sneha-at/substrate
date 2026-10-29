@@ -32,6 +32,7 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
+	"k8s.io/apimachinery/pkg/util/sets"
 )
 
 // TagActorSnapshot tags the external snapshot held by the suspended actor the
@@ -132,34 +133,40 @@ func (w *ActorWorkflow) TagActorSnapshot(ctx context.Context, tag *ateapi.Tag, e
 // All volumes means status.external_volumes rather than the mounted subset: a
 // template may declare a volume no container mounts, and leaving it out would
 // produce a tag missing a volume.
+//
+// Volumes that reference an ExternalVolume are never captured. All volumes
+// skips them, and naming one fails the call. So does asking for all volumes
+// when none can be captured.
 func selectTagVolumes(actor *ateapi.Actor, sel *ateapi.ExternalVolumeSelection) ([]*ateapi.ExternalVolumeStatus, error) {
 	if sel == nil {
 		return nil, nil
 	}
 	names := sel.GetNames()
-	volumes := actor.GetStatus().GetExternalVolumes().GetVolumes()
-	if len(names) == 0 {
-		return volumes, nil
-	}
-	requested := make(map[string]bool, len(names))
-	for _, name := range names {
-		requested[name] = true
-	}
+	actorRef := resources.ActorRefFromActor(actor)
+	requested := sets.New(names...)
 	var selected []*ateapi.ExternalVolumeStatus
-	for _, vol := range volumes {
-		if requested[vol.GetName()] {
-			selected = append(selected, vol)
-			delete(requested, vol.GetName())
+	for _, vol := range actor.GetStatus().GetExternalVolumes().GetVolumes() {
+		named := requested.Has(vol.GetName())
+		if len(names) > 0 && !named {
+			continue
 		}
-	}
-	if len(requested) > 0 {
-		var unknown []string
-		for _, name := range names {
-			if requested[name] {
-				unknown = append(unknown, name)
+		// A volume mounted through an ExternalVolumeRef names a shared
+		// ExternalVolume that other actors can use. An empty name means the
+		// actor owns the volume.
+		if ev := vol.GetExternalVolumeName(); ev != "" {
+			if named {
+				return nil, apierror.InvalidArgument("Volume %q of Actor %s references ExternalVolume %q, which tags cannot snapshot", vol.GetName(), actorRef, ev)
 			}
+			continue
 		}
-		return nil, apierror.InvalidArgument("Actor %s has no external volumes named %q", resources.ActorRefFromActor(actor), unknown)
+		selected = append(selected, vol)
+		requested.Delete(vol.GetName())
+	}
+	if requested.Len() > 0 {
+		return nil, apierror.InvalidArgument("Actor %s has no external volumes named %q", actorRef, sets.List(requested))
+	}
+	if len(selected) == 0 {
+		return nil, apierror.InvalidArgument("No volumes of Actor %s can be snapshotted; create the tag without --with-volumes", actorRef)
 	}
 	return selected, nil
 }

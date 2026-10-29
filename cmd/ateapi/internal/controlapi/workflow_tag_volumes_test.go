@@ -371,23 +371,37 @@ func TestSelectTagVolumes(t *testing.T) {
 	actor := &ateapi.Actor{
 		Metadata: &ateapi.ResourceMetadata{Atespace: "team-a", Name: "actor-1"},
 		Status: &ateapi.ActorStatus{ExternalVolumes: &ateapi.ExternalVolumes{Volumes: []*ateapi.ExternalVolumeStatus{
-			{Name: "data"}, {Name: "cache"}, {Name: "scratch"},
+			{Name: "data"}, {Name: "shared", ExternalVolumeName: "shared-1"}, {Name: "cache"}, {Name: "scratch"},
+		}}},
+	}
+	refOnly := &ateapi.Actor{
+		Metadata: &ateapi.ResourceMetadata{Atespace: "team-a", Name: "actor-2"},
+		Status: &ateapi.ActorStatus{ExternalVolumes: &ateapi.ExternalVolumes{Volumes: []*ateapi.ExternalVolumeStatus{
+			{Name: "shared", ExternalVolumeName: "shared-1"},
 		}}},
 	}
 	tests := []struct {
 		name     string
+		actor    *ateapi.Actor
 		sel      *ateapi.ExternalVolumeSelection
 		want     []string
 		wantCode codes.Code
 	}{
 		{name: "not requested", sel: nil, want: nil},
-		{name: "all", sel: &ateapi.ExternalVolumeSelection{}, want: []string{"data", "cache", "scratch"}},
+		{name: "all skips ExternalVolume refs", sel: &ateapi.ExternalVolumeSelection{}, want: []string{"data", "cache", "scratch"}},
+		{name: "all with only ExternalVolume refs", actor: refOnly, sel: &ateapi.ExternalVolumeSelection{}, wantCode: codes.InvalidArgument},
+		{name: "all with no volumes", actor: &ateapi.Actor{Metadata: &ateapi.ResourceMetadata{Atespace: "team-a", Name: "actor-3"}}, sel: &ateapi.ExternalVolumeSelection{}, wantCode: codes.InvalidArgument},
 		{name: "named keeps actor order", sel: &ateapi.ExternalVolumeSelection{Names: []string{"scratch", "data"}}, want: []string{"data", "scratch"}},
 		{name: "unknown name", sel: &ateapi.ExternalVolumeSelection{Names: []string{"data", "missing"}}, wantCode: codes.InvalidArgument},
+		{name: "named ExternalVolume ref", sel: &ateapi.ExternalVolumeSelection{Names: []string{"data", "shared"}}, wantCode: codes.InvalidArgument},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := selectTagVolumes(actor, tt.sel)
+			a := actor
+			if tt.actor != nil {
+				a = tt.actor
+			}
+			got, err := selectTagVolumes(a, tt.sel)
 			if code := apierror.Code(err); code != tt.wantCode {
 				t.Fatalf("selectTagVolumes() error = %v (code %v), want code %v", err, code, tt.wantCode)
 			}
