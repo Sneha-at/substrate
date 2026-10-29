@@ -1,5 +1,15 @@
 [
   {
+    "rule": "create-request-shape",
+    "subject": "substrate.ateapi.v1.Control.CreateTag",
+    "message": "request field \"external_volume_names\" is not allowed - want only \"tag\" substrate.ateapi.v1.Tag and optional \"options\" substrate.ateapi.v1.CreateOptions"
+  },
+  {
+    "rule": "create-request-shape",
+    "subject": "substrate.ateapi.v1.Control.CreateTag",
+    "message": "request field \"include_external_volumes\" is not allowed - want only \"tag\" substrate.ateapi.v1.Tag and optional \"options\" substrate.ateapi.v1.CreateOptions"
+  },
+  {
     "rule": "documented",
     "subject": "substrate.ateapi.v1.Actor",
     "message": "message has no doc comment"
